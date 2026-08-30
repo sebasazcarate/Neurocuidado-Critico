@@ -1,0 +1,2856 @@
+<!DOCTYPE html>
+
+<html lang="es">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+
+<title>Monitor Multiparamétrico — Neurocuidado Crítico</title>
+
+<style>
+:root{
+  --bg: #05080c;
+  --panel: #0d141c;
+  --panel-2: #101a24;
+  --grid: #16232f;
+  --border: #1c2c3a;
+  --text-dim: #5f7688;
+  --text: #cfe3ef;
+  --icp: #f2c14e;
+  --cpp: #58c4dc;
+  --abp: #e8544a;
+  --ecg: #3ddc84;
+  --temp: #c58af0;
+  --alarm: #ff2a2a;
+  --alarm-dim: rgba(255, 42, 42, 0.12);
+  --ok: #3ddc84;
+  --warn: #f2c14e;
+  --mono: 'IBM Plex Mono', 'Courier New', monospace;
+  --sans: 'Inter', -apple-system, 'Segoe UI', sans-serif;
+}
+
+*{
+  box-sizing:border-box;
+  -webkit-tap-highlight-color:transparent;
+}
+
+html,body{
+  margin:0;
+  padding:0;
+  height:100%;
+  background:var(--bg);
+  font-family:var(--sans);
+  color:var(--text);
+  overflow:hidden;
+  user-select:none;
+}
+
+#setup-screen {
+  position:absolute;
+  top:0;
+  left:0;
+  width:100vw;
+  height:100vh;
+  background:var(--bg);
+  z-index:9999;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:20px;
+}
+
+.setup-box {
+  background:var(--panel);
+  padding:30px;
+  border-radius:12px;
+  border:1px solid var(--border);
+  text-align:center;
+  box-shadow:0 10px 30px rgba(0,0,0,0.5);
+  max-width:400px;
+  width:90%;
+}
+
+.setup-box input {
+  padding:10px;
+  font-size:18px;
+  width:140px;
+  text-align:center;
+  background:#05080c;
+  color:var(--text);
+  border:1px solid var(--border);
+  border-radius:6px;
+  margin-bottom:8px;
+  outline:none;
+  font-family:var(--mono);
+}
+
+.setup-box input:focus {
+  border-color:var(--ok);
+}
+
+#app{
+  display:flex;
+  flex-direction:column;
+  height:100vh;
+  width:100vw;
+  background:
+    radial-gradient(
+      ellipse at top left,
+      rgba(255,255,255,0.02),
+      transparent 60%
+    ),
+    var(--bg);
+}
+
+#topbar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:8px 16px;
+  background:var(--panel);
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+}
+
+.brand{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+
+.brand-mark{
+  width:9px;
+  height:9px;
+  border-radius:50%;
+  background:var(--ok);
+  box-shadow:0 0 8px var(--ok);
+  animation:heartbeat 1.2s infinite ease-in-out;
+}
+
+@keyframes heartbeat{
+  0%,100%{
+    opacity:1;
+    transform:scale(1);
+  }
+
+  50%{
+    opacity:.4;
+    transform:scale(.7);
+  }
+}
+
+.brand-name{
+  font-size:13px;
+  letter-spacing:2px;
+  color:var(--text);
+  font-weight:700;
+}
+
+.patient-block{
+  display:flex;
+  gap:22px;
+  font-family:var(--mono);
+  font-size:12px;
+  color:var(--text-dim);
+}
+
+.patient-block b{
+  color:var(--text);
+  font-weight:500;
+}
+
+#clock{
+  font-family:var(--mono);
+  font-size:14px;
+  color:var(--text);
+  letter-spacing:1px;
+}
+
+#main{
+  flex:1;
+  display:flex;
+  min-height:0;
+}
+
+#waves{
+  flex:1;
+  display:flex;
+  flex-direction:column;
+  min-width:0;
+  border-right:1px solid var(--border);
+}
+
+.wave-row{
+  flex:1;
+  position:relative;
+  border-bottom:1px solid var(--border);
+  display:flex;
+  flex-direction:column;
+  min-height:0;
+}
+
+.wave-row:last-child{
+  border-bottom:none;
+}
+
+.wave-label{
+  position:absolute;
+  top:6px;
+  left:10px;
+  z-index:2;
+  font-family:var(--mono);
+  font-size:11px;
+  letter-spacing:1px;
+  padding:2px 6px;
+  border-radius:3px;
+  background:rgba(0,0,0,0.35);
+}
+
+.wave-scale{
+  position:absolute;
+  right:6px;
+  top:0;
+  bottom:0;
+  z-index:2;
+  display:flex;
+  flex-direction:column;
+  justify-content:space-between;
+  padding:4px 0;
+  font-family:var(--mono);
+  font-size:9px;
+  color:var(--text-dim);
+  pointer-events:none;
+}
+
+canvas.wave-canvas{
+  width:100%;
+  height:100%;
+  display:block;
+}
+
+#numerics{
+  width:240px;
+  flex-shrink:0;
+  display:flex;
+  flex-direction:column;
+  background:var(--panel);
+}
+
+.num-card{
+  flex:1;
+  position:relative;
+  padding:8px 14px 5px;
+  border-bottom:1px solid var(--border);
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  min-height:0;
+  transition:background .2s, border-left .2s;
+}
+
+.num-card.alarming{
+  background:var(--alarm-dim);
+  border-left:4px solid var(--alarm);
+}
+
+.num-head{
+  display:flex;
+  justify-content:space-between;
+  align-items:baseline;
+  font-family:var(--mono);
+  font-size:11px;
+  letter-spacing:1.5px;
+  color:var(--text-dim);
+}
+
+.num-head .lims{
+  font-size:9px;
+  color:var(--text-dim);
+  opacity:.7;
+}
+
+.num-value{
+  font-family:var(--mono);
+  font-weight:700;
+  line-height:1;
+  font-size:34px;
+  margin-top:2px;
+  letter-spacing:-1px;
+}
+
+.num-value .unit{
+  font-size:12px;
+  font-weight:400;
+  margin-left:6px;
+  color:var(--text-dim);
+}
+
+.num-sub{
+  font-family:var(--mono);
+  font-size:10px;
+  color:var(--text-dim);
+  margin-top:3px;
+  transition:color .2s;
+}
+
+.num-card.alarming .num-sub{
+  color:#ff6b6b;
+  font-weight:600;
+}
+
+#icp-card .num-value{
+  color:var(--icp);
+}
+
+#cpp-card .num-value{
+  color:var(--cpp);
+}
+
+#abp-card .num-value{
+  color:var(--abp);
+}
+
+#hr-card .num-value{
+  color:var(--ecg);
+}
+
+#temp-card .num-value{
+  color:var(--temp);
+}
+
+@keyframes pulse-icp{
+  0%,100%{
+    color:var(--icp);
+  }
+
+  50%{
+    color:#ff0033;
+  }
+}
+
+@keyframes pulse-cpp{
+  0%,100%{
+    color:var(--cpp);
+  }
+
+  50%{
+    color:#ff0033;
+  }
+}
+
+@keyframes pulse-abp{
+  0%,100%{
+    color:var(--abp);
+  }
+
+  50%{
+    color:#ff0033;
+  }
+}
+
+#icp-card.alarming .num-value{
+  animation:pulse-icp 0.7s infinite ease-in-out;
+}
+
+#cpp-card.alarming .num-value{
+  animation:pulse-cpp 0.7s infinite ease-in-out;
+}
+
+#abp-card.alarming .num-value{
+  animation:pulse-abp 0.7s infinite ease-in-out;
+}
+
+#controls{
+  display:flex;
+  align-items:center;
+  justify-content:flex-start;
+  gap:8px;
+  padding:10px 14px;
+  background:var(--panel-2);
+  border-top:1px solid var(--border);
+  flex-shrink:0;
+}
+
+.btn{
+  font-family:var(--sans);
+  font-size:12px;
+  color:var(--text);
+  background:#16212c;
+  border:1px solid var(--border);
+  border-radius:6px;
+  padding:9px 16px;
+  cursor:pointer;
+  letter-spacing:.3px;
+  transition:background .15s, border-color .15s;
+}
+
+.btn:hover{
+  background:#1c2b38;
+  border-color:#2a3d4d;
+}
+
+.btn.primary{
+  border-color:#2a4d3d;
+  color:var(--ok);
+  font-weight:600;
+}
+
+#btn-reset{
+  margin-left:auto;
+  border-color:var(--alarm);
+  color:var(--alarm);
+}
+
+#btn-reset:hover{
+  background:rgba(255,42,42,0.1);
+}
+
+#btn-reset:disabled{
+  opacity:0.5;
+  cursor:not-allowed;
+}
+
+#feedback-screen{
+  position:absolute;
+  top:0;
+  left:0;
+  width:100vw;
+  height:100vh;
+  background:rgba(5,8,12,0.95);
+  backdrop-filter:blur(8px);
+  z-index:10000;
+  display:none;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  padding:20px;
+}
+
+.feedback-box{
+  background:var(--panel);
+  border-radius:12px;
+  border:1px solid var(--border);
+  box-shadow:0 15px 40px rgba(0,0,0,0.7);
+  width:100%;
+  max-width:800px;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+}
+
+.feedback-header{
+  background:var(--panel-2);
+  padding:20px;
+  border-bottom:1px solid var(--border);
+  text-align:center;
+}
+
+.feedback-header h2{
+  margin:0;
+  color:var(--text);
+  font-size:22px;
+  letter-spacing:1px;
+}
+
+.feedback-content{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:20px;
+  padding:25px;
+}
+
+.data-section h3{
+  margin-top:0;
+  color:var(--text-dim);
+  font-size:13px;
+  text-transform:uppercase;
+  letter-spacing:1px;
+  border-bottom:1px solid var(--border);
+  padding-bottom:8px;
+  margin-bottom:15px;
+}
+
+.data-row{
+  display:flex;
+  justify-content:space-between;
+  margin-bottom:10px;
+  font-family:var(--mono);
+  font-size:14px;
+}
+
+.data-row span:first-child{
+  color:var(--text-dim);
+}
+
+.data-row span:last-child{
+  font-weight:600;
+  color:var(--text);
+}
+
+.eval-section{
+  grid-column:span 2;
+  background:var(--bg);
+  border-radius:8px;
+  padding:20px;
+  border:1px solid var(--border);
+}
+
+.eval-list{
+  list-style:none;
+  padding:0;
+  margin:0;
+  font-family:var(--sans);
+  font-size:14px;
+  line-height:1.6;
+}
+
+.eval-list li{
+  margin-bottom:12px;
+  padding-left:28px;
+  position:relative;
+}
+
+.eval-list li.success::before{
+  content:'✓';
+  position:absolute;
+  left:0;
+  color:var(--ok);
+  font-weight:bold;
+  font-size:16px;
+}
+
+.eval-list li.warning::before{
+  content:'⚠️';
+  position:absolute;
+  left:0;
+  font-size:14px;
+}
+
+.eval-list li.error::before{
+  content:'✗';
+  position:absolute;
+  left:0;
+  color:var(--alarm);
+  font-weight:bold;
+  font-size:16px;
+}
+
+.feedback-footer{
+  padding:20px;
+  text-align:center;
+  border-top:1px solid var(--border);
+  background:var(--panel-2);
+}
+
+::selection{
+  background:transparent;
+}
+</style>
+
+</head>
+
+<body>
+
+<div id="setup-screen" style="display:flex;">
+
+  <div
+    class="brand-name"
+    style="
+      font-size:26px;
+      color:var(--text);
+      margin-bottom:5px;
+      font-weight:bold;
+    "
+  >
+    NEUROCUIDADO CRÍTICO
+  </div>
+
+  <p
+    style="
+      color:var(--text-dim);
+      margin-bottom:25px;
+      font-family:var(--mono);
+    "
+  >
+    Configure la temperatura inicial del paciente antes de conectar la ESP32.
+  </p>
+
+  <div class="setup-box">
+
+    <p
+      style="
+        color:var(--text);
+        margin-bottom:10px;
+        font-family:var(--mono);
+        font-weight:600;
+      "
+    >
+      Temperatura (°C)
+    </p>
+
+    <input
+      type="number"
+      id="temp-input"
+      min="32"
+      max="40"
+      step="0.1"
+      value="36.5"
+    >
+
+    <p
+      style="
+        color:var(--text-dim);
+        margin-bottom:15px;
+        font-size:11px;
+        font-family:var(--mono);
+      "
+    >
+      Rango permitido: 32.0 °C a 40.0 °C
+    </p>
+
+    <button
+      class="btn primary"
+      id="btn-start-ws"
+      style="
+        font-size:14px;
+        padding:12px 24px;
+        width:100%;
+      "
+    >
+      Conectar a ESP32 e Iniciar
+    </button>
+
+  </div>
+
+  <div
+    id="ws-status"
+    style="
+      color:var(--text-dim);
+      font-family:var(--mono);
+      font-size:12px;
+      margin-top:15px;
+    "
+  >
+    Esperando configuración...
+  </div>
+
+</div>
+
+
+<div id="app">
+
+  <div id="topbar">
+
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div class="brand-name">
+        NEUROCUIDADO CRÍTICO
+      </div>
+    </div>
+
+    <div class="patient-block">
+
+      <div>
+        PACIENTE&nbsp;
+        <b>RÍOS, M.</b>
+      </div>
+
+      <div>
+        MODO&nbsp;
+        <b>PARENQUIMATOSO</b>
+      </div>
+
+      <div>
+        ESP32&nbsp;
+        <b id="esp32-status">
+          EN ESPERA
+        </b>
+      </div>
+
+    </div>
+
+    <div id="clock">
+      23:41:39
+    </div>
+
+  </div>
+
+
+  <div id="main">
+
+    <div id="waves">
+
+      <div class="wave-row">
+
+        <div
+          class="wave-label"
+          style="color:var(--icp)"
+        >
+          PIC · mmHg
+        </div>
+
+        <div class="wave-scale">
+          <span>40</span>
+          <span>20</span>
+          <span>0</span>
+        </div>
+
+        <canvas
+          class="wave-canvas"
+          id="wave-icp"
+          width="1125"
+          height="180"
+        ></canvas>
+
+      </div>
+
+
+      <div class="wave-row">
+
+        <div
+          class="wave-label"
+          style="color:var(--abp)"
+        >
+          PAM (ABP) · mmHg
+        </div>
+
+        <div class="wave-scale">
+          <span>160</span>
+          <span>80</span>
+          <span>0</span>
+        </div>
+
+        <canvas
+          class="wave-canvas"
+          id="wave-abp"
+          width="1125"
+          height="180"
+        ></canvas>
+
+      </div>
+
+
+      <div class="wave-row">
+
+        <div
+          class="wave-label"
+          style="color:var(--ecg)"
+        >
+          ECG · II
+        </div>
+
+        <div class="wave-scale">
+          <span>+</span>
+          <span></span>
+          <span>−</span>
+        </div>
+
+        <canvas
+          class="wave-canvas"
+          id="wave-ecg"
+          width="1125"
+          height="179"
+        ></canvas>
+
+      </div>
+
+    </div>
+
+
+    <div id="numerics">
+
+      <div
+        class="num-card"
+        id="icp-card"
+      >
+
+        <div class="num-head">
+
+          <span style="color:var(--icp)">
+            PIC
+          </span>
+
+          <span
+            class="lims"
+            id="icp-lims"
+          >
+            Lím 20
+          </span>
+
+        </div>
+
+        <div class="num-value">
+
+          <span id="icp-val">
+            12
+          </span>
+
+          <span class="unit">
+            mmHg
+          </span>
+
+        </div>
+
+        <div class="num-sub">
+          Onda: P1&gt;P2&gt;P3
+        </div>
+
+      </div>
+
+
+      <div
+        class="num-card"
+        id="cpp-card"
+      >
+
+        <div class="num-head">
+
+          <span style="color:var(--cpp)">
+            PPC
+          </span>
+
+          <span class="lims">
+            Lím 60–70
+          </span>
+
+        </div>
+
+        <div class="num-value">
+
+          <span id="cpp-val">
+            75
+          </span>
+
+          <span class="unit">
+            mmHg
+          </span>
+
+        </div>
+
+        <div class="num-sub">
+          PPC Óptima
+        </div>
+
+      </div>
+
+
+      <div
+        class="num-card"
+        id="abp-card"
+      >
+
+        <div class="num-head">
+
+          <span style="color:var(--abp)">
+            PAM
+          </span>
+
+          <span class="lims">
+            Lím 65–110
+          </span>
+
+        </div>
+
+        <div class="num-value">
+
+          <span id="abp-val">
+            87
+          </span>
+
+          <span class="unit">
+            mmHg
+          </span>
+
+        </div>
+
+        <div
+          class="num-sub"
+          id="abp-sub"
+        >
+          120/70 mmHg
+        </div>
+
+      </div>
+
+
+      <div
+        class="num-card"
+        id="hr-card"
+      >
+
+        <div class="num-head">
+
+          <span style="color:var(--ecg)">
+            FC
+          </span>
+
+          <span class="lims">
+            Lím 50–120
+          </span>
+
+        </div>
+
+        <div class="num-value">
+
+          <span id="hr-val">
+            72
+          </span>
+
+          <span class="unit">
+            lpm
+          </span>
+
+        </div>
+
+        <div class="num-sub">
+          Ritmo sinusal
+        </div>
+
+      </div>
+
+
+      <div
+        class="num-card"
+        id="temp-card"
+      >
+
+        <div class="num-head">
+
+          <span style="color:var(--temp)">
+            TEMP
+          </span>
+
+          <span class="lims">
+            Lím 36–38
+          </span>
+
+        </div>
+
+        <div class="num-value">
+
+          <span id="temp-val">
+            36.5
+          </span>
+
+          <span class="unit">
+            °C
+          </span>
+
+        </div>
+
+        <div
+          class="num-sub"
+          id="temp-sub"
+        >
+          Central
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+
+
+  <div id="controls">
+
+    <button
+      class="btn"
+      id="btn-freeze"
+    >
+      ❚❚ Congelar onda
+    </button>
+
+    <button
+      class="btn"
+      id="btn-reset"
+    >
+      ⟲ Finalizar y Calcular Evolución
+    </button>
+
+  </div>
+
+</div>
+
+
+<div id="feedback-screen">
+
+  <div class="feedback-box">
+
+    <div class="feedback-header">
+      <h2>
+        REPORTE DE SIMULACIÓN CLÍNICA
+      </h2>
+    </div>
+
+
+    <div class="feedback-content">
+
+      <div class="data-section">
+
+        <h3>
+          Condición Inicial (Ingreso)
+        </h3>
+
+        <div class="data-row">
+          <span>Temperatura:</span>
+          <span id="fb-temp">--</span>
+        </div>
+
+        <div class="data-row">
+          <span>PAM Asignada:</span>
+          <span id="fb-pam">--</span>
+        </div>
+
+        <div class="data-row">
+          <span>PIC Inicial:</span>
+          <span id="fb-pic-ini">--</span>
+        </div>
+
+      </div>
+
+
+      <div class="data-section">
+
+        <h3>
+          Intervención del Estudiante
+        </h3>
+
+        <div class="data-row">
+          <span>Ángulo de Cabecera:</span>
+          <span id="fb-angulo">--</span>
+        </div>
+
+        <div class="data-row">
+          <span>Tasa de Drenaje:</span>
+          <span id="fb-drenaje">--</span>
+        </div>
+
+        <div class="data-row">
+          <span>PIC Evolucionada (Eq 6.4):</span>
+          <span id="fb-pic-fin">--</span>
+        </div>
+
+      </div>
+
+
+      <div class="eval-section">
+
+        <h3>
+          Evaluación de Desempeño
+        </h3>
+
+        <ul
+          class="eval-list"
+          id="fb-evaluacion"
+        ></ul>
+
+      </div>
+
+    </div>
+
+
+    <div class="feedback-footer">
+
+      <button
+        class="btn primary"
+        onclick="window.location.reload();"
+      >
+        Terminar y Volver al Inicio
+      </button>
+
+    </div>
+
+  </div>
+
+</div>
+
+
+<script>
+
+(function(){
+
+  function tick(){
+
+    document
+      .getElementById('clock')
+      .textContent =
+      new Date()
+        .toLocaleTimeString(
+          'es-ES',
+          {
+            hour12:false
+          }
+        );
+  }
+
+  tick();
+
+  setInterval(
+    tick,
+    1000
+  );
+
+
+  const state = {
+
+    icpBase:12,
+
+    abpSys:120,
+
+    abpDia:70,
+
+    hr:72,
+
+    temp:36.5,
+
+    t:0,
+
+    frozen:false,
+
+    icpMeasured:null,
+
+    picInicialMeasured:null,
+
+    anguloMeasured:30,
+
+    drenajeMeasured:20,
+
+    esp32Connected:false,
+
+    escenarioFinalizado:false,
+
+    picObjetivoFinal:0,
+
+    reportShown:false
+
+  };
+
+
+  document
+    .getElementById('setup-screen')
+    .style.display =
+    'flex';
+
+
+  let ws;
+
+
+  const setupScreen =
+    document
+      .getElementById(
+        'setup-screen'
+      );
+
+
+  const btnStart =
+    document
+      .getElementById(
+        'btn-start-ws'
+      );
+
+
+  btnStart
+    .addEventListener(
+      'click',
+      () => {
+
+        const tempValue =
+          parseFloat(
+            document
+              .getElementById(
+                'temp-input'
+              )
+              .value
+          );
+
+
+        if (
+          isNaN(tempValue)
+          ||
+          tempValue < 32.0
+          ||
+          tempValue > 40.0
+        ) {
+
+          return alert(
+            "Ingrese temperatura válida."
+          );
+        }
+
+
+        let pam =
+          tempValue < 35.0
+            ? 65
+            : 85;
+
+
+        if (
+          pam === 85
+        ) {
+
+          state.abpSys = 115;
+
+          state.abpDia = 70;
+
+        }
+
+        else {
+
+          state.abpSys = 85;
+
+          state.abpDia = 55;
+
+        }
+
+
+        state.temp =
+          tempValue;
+
+
+        document
+          .getElementById(
+            'ws-status'
+          )
+          .textContent =
+          "Conectando a ws://192.168.4.1:5000...";
+
+
+        state.picInicialMeasured =
+          tempValue >= 37.5
+            ? 24
+            : 15;
+
+
+        try {
+
+          ws =
+            new WebSocket(
+              'ws://192.168.4.1:5000/'
+            );
+
+
+          ws.onopen =
+            () => {
+
+              ws.send(
+                JSON.stringify(
+                  {
+                    TEMPERATURA:
+                      tempValue
+                  }
+                )
+              );
+
+
+              setupScreen
+                .style.display =
+                'none';
+
+
+              state
+                .esp32Connected =
+                true;
+
+
+              document
+                .getElementById(
+                  'esp32-status'
+                )
+                .textContent =
+                'CONECTADA';
+
+            };
+
+
+          ws.onmessage =
+            (event) => {
+
+              try {
+
+                const datos =
+                  JSON.parse(
+                    event.data
+                  );
+
+
+                if (
+                  !state
+                    .escenarioFinalizado
+                ) {
+
+                  if (
+                    Number.isFinite(
+                      datos.PIC
+                    )
+                  ) {
+
+                    state
+                      .icpMeasured =
+                      datos.PIC;
+
+
+                    if (
+                      state
+                        .picInicialMeasured
+                      === null
+                    ) {
+
+                      state
+                        .picInicialMeasured =
+                        datos.PIC;
+
+                    }
+
+                  }
+
+
+                  if (
+                    Number.isFinite(
+                      datos.ANGULO
+                    )
+                  ) {
+
+                    state
+                      .anguloMeasured =
+                      datos.ANGULO;
+
+                  }
+
+
+                  if (
+                    Number.isFinite(
+                      datos.DRENAJE
+                    )
+                  ) {
+
+                    state
+                      .drenajeMeasured =
+                      datos.DRENAJE;
+
+                  }
+
+                }
+
+              }
+
+              catch(e) {}
+
+            };
+
+
+          ws.onclose =
+            () => {
+
+              state
+                .esp32Connected =
+                false;
+
+
+              document
+                .getElementById(
+                  'esp32-status'
+                )
+                .textContent =
+                'DESCONECTADA';
+
+            };
+
+        }
+
+        catch(e) {
+
+          setupScreen
+            .style.display =
+            'none';
+
+        }
+
+      }
+    );
+
+
+  document
+    .getElementById(
+      'btn-freeze'
+    )
+    .addEventListener(
+      'click',
+      function(){
+
+        state.frozen =
+          !state.frozen;
+
+
+        this.textContent =
+          state.frozen
+            ? '▶ Reanudar onda'
+            : '❚❚ Congelar onda';
+
+      }
+    );
+
+
+  document
+    .getElementById(
+      'btn-reset'
+    )
+    .addEventListener(
+      'click',
+      function(){
+
+        if (
+          confirm(
+            '¿Desea finalizar la simulación y calcular la evolución de la PIC?'
+          )
+        ) {
+
+          if (
+            ws
+            &&
+            ws.readyState
+            === WebSocket.OPEN
+          ) {
+
+            ws.close();
+
+          }
+
+
+          this.disabled =
+            true;
+
+
+          this.textContent =
+            "Calculando evolución de ondas...";
+
+
+          let picInic =
+            state.picInicialMeasured
+            || 22;
+
+
+          let D =
+            state.drenajeMeasured
+            || 0;
+
+
+          if (
+            D > 0
+            &&
+            D <= 20
+          ) {
+
+            state
+              .picObjetivoFinal =
+              (0.6180 * picInic)
+              -
+              2.1676;
+
+          }
+
+          else if (
+            D === 0
+          ) {
+
+            state
+              .picObjetivoFinal =
+              (0.9890 * picInic)
+              +
+              0.8873;
+
+          }
+
+          else {
+
+            state
+              .picObjetivoFinal =
+              Math.max(
+                0,
+                (0.6372 * picInic)
+                -
+                4.4962
+              );
+
+          }
+
+
+          state
+            .escenarioFinalizado =
+            true;
+
+        }
+
+      }
+    );
+
+
+  function mostrarReporteFinal(
+    tempInicial,
+    pamInicial,
+    anguloFinal,
+    drenajeFinal,
+    picFinal,
+    picInicialAntesDelDrenaje
+  ) {
+
+    document
+      .getElementById(
+        'feedback-screen'
+      )
+      .style.display =
+      'flex';
+
+
+    document
+      .getElementById(
+        'fb-temp'
+      )
+      .textContent =
+      tempInicial
+        .toFixed(1)
+      +
+      ' °C';
+
+
+    document
+      .getElementById(
+        'fb-pam'
+      )
+      .textContent =
+      pamInicial
+      +
+      ' mmHg';
+
+
+    document
+      .getElementById(
+        'fb-pic-ini'
+      )
+      .textContent =
+      Math.round(
+        picInicialAntesDelDrenaje
+      )
+      +
+      ' mmHg';
+
+
+    document
+      .getElementById(
+        'fb-angulo'
+      )
+      .textContent =
+      anguloFinal
+      +
+      ' °';
+
+
+    document
+      .getElementById(
+        'fb-drenaje'
+      )
+      .textContent =
+      drenajeFinal
+        .toFixed(1)
+      +
+      ' ml/h';
+
+
+    document
+      .getElementById(
+        'fb-pic-fin'
+      )
+      .textContent =
+      picFinal
+      +
+      ' mmHg (Eq. 6.4)';
+
+
+    const listaEval =
+      document
+        .getElementById(
+          'fb-evaluacion'
+        );
+
+
+    listaEval.innerHTML =
+      '';
+
+
+    if (
+      anguloFinal >= 30
+      &&
+      anguloFinal <= 45
+    ) {
+
+      listaEval.innerHTML +=
+        `<li class="success">
+        Manejo óptimo de la cabecera (${anguloFinal}°).
+        Se logró un equilibrio entre la reducción de la PIC
+        y el mantenimiento de la perfusión cerebral.
+        </li>`;
+
+    }
+
+    else if (
+      anguloFinal < 30
+    ) {
+
+      listaEval.innerHTML +=
+        `<li class="error">
+        Cabecera muy baja (${anguloFinal}°).
+        Al acercarse al decúbito supino,
+        el retorno venoso cerebral es más difícil,
+        aumentando el componente sanguíneo venoso
+        y manteniendo la hipertensión sostenida.
+        </li>`;
+
+    }
+
+    else {
+
+      listaEval.innerHTML +=
+        `<li class="warning">
+        Posición Fowler excesiva (${anguloFinal}°).
+        Aunque la PIC baje,
+        la presión hidrostática en las arterias cerebrales
+        disminuye por efecto de la gravedad,
+        reduciendo la presión de perfusión cerebral (PPC).
+        </li>`;
+
+    }
+
+
+    const picInicial =
+      Math.round(
+        picInicialAntesDelDrenaje
+      );
+
+
+    if (
+      picInicial >= 5
+      &&
+      picInicial <= 9
+    ) {
+
+      if (
+        drenajeFinal === 0
+      ) {
+
+        listaEval.innerHTML +=
+          `<li class="success">
+          Manejo de Drenaje: Correcto.
+          Preserva la dinámica fisiológica.
+          </li>`;
+
+      }
+
+      else if (
+        drenajeFinal > 0
+        &&
+        drenajeFinal <= 20
+      ) {
+
+        listaEval.innerHTML +=
+          `<li class="error">
+          Manejo de Drenaje: Incorrecto,
+          sobredrenaje.
+          Manifestación: cefalea y sangrado.
+          </li>`;
+
+      }
+
+      else {
+
+        listaEval.innerHTML +=
+          `<li class="error">
+          Manejo de Drenaje: Incorrecto,
+          colapso ventricular.
+          Manifestación: cefalea y sangrado.
+          </li>`;
+
+      }
+
+    }
+
+
+    else if (
+      picInicial >= 10
+      &&
+      picInicial <= 14
+    ) {
+
+      if (
+        drenajeFinal === 0
+      ) {
+
+        listaEval.innerHTML +=
+          `<li class="success">
+          Manejo de Drenaje: Correcto.
+          Preserva la dinámica fisiológica.
+          </li>`;
+
+      }
+
+      else if (
+        drenajeFinal > 0
+        &&
+        drenajeFinal <= 20
+      ) {
+
+        listaEval.innerHTML +=
+          `<li class="error">
+          Manejo de Drenaje: Incorrecto,
+          riesgo de sobredrenaje.
+          </li>`;
+
+      }
+
+      else {
+
+        listaEval.innerHTML +=
+          `<li class="error">
+          Manejo de Drenaje: Incorrecto,
+          colapso ventricular.
+          Manifestación: cefalea y sangrado.
+          </li>`;
+
+      }
+
+    }
+
+
+    else if (
+      picInicial >= 15
+      &&
+      picInicial <= 19
+    ) {
+
+      if (
+        drenajeFinal === 0
+      ) {
+
+        listaEval.innerHTML +=
+          `<li class="success">
+          Manejo de Drenaje: Correcto.
+          Existe riesgo de cruzar el umbral terapéutico.
+          </li>`;
+
+      }
+
+      else if (
+        drenajeFinal > 0
+        &&
+        drenajeFinal <= 20
+      ) {
+
+        listaEval.innerHTML +=
+          `<li class="warning">
+          Manejo de Drenaje:
+          Puede prevenir la hipertensión
+          si existe una tendencia ascendente;
+          de lo contrario,
+          el drenaje resulta innecesario.
+          </li>`;
+
+      }
+
+      else {
+
+        listaEval.innerHTML +=
+          `<li class="error">
+          Manejo de Drenaje: Incorrecto,
+          sobredrenaje con pérdida de reserva.
+          </li>`;
+
+      }
+
+    }
+
+
+    else if (
+      picInicial >= 20
+      &&
+      picInicial <= 24
+    ) {
+
+      if (
+        drenajeFinal === 0
+      ) {
+
+        listaEval.innerHTML +=
+          `<li class="error">
+          Manejo de Drenaje: Incorrecto,
+          favorece la hipertensión intracraneal.
+          </li>`;
+
+      }
+
+      else if (
+        drenajeFinal > 0
+        &&
+        drenajeFinal <= 20
+      ) {
+
+        listaEval.innerHTML +=
+          `<li class="success">
+          Manejo de Drenaje: Correcto.
+          Drenaje a tasa controlada.
+          </li>`;
+
+      }
+
+      else {
+
+        listaEval.innerHTML +=
+          `<li class="error">
+          Manejo de Drenaje: Incorrecto,
+          caída brusca de la PIC.
+          </li>`;
+
+      }
+
+    }
+
+
+    else if (
+      picInicial >= 25
+      &&
+      picInicial <= 30
+    ) {
+
+      if (
+        drenajeFinal === 0
+      ) {
+
+        listaEval.innerHTML +=
+          `<li class="error">
+          Manejo de Drenaje: Incorrecto,
+          favorece la hipertensión intracraneal.
+          </li>`;
+
+      }
+
+      else if (
+        drenajeFinal > 0
+        &&
+        drenajeFinal <= 20
+      ) {
+
+        listaEval.innerHTML +=
+          `<li class="success">
+          Manejo de Drenaje: Correcto.
+          </li>`;
+
+      }
+
+      else {
+
+        listaEval.innerHTML +=
+          `<li class="error">
+          Manejo de Drenaje: Incorrecto,
+          caída brusca de la PIC.
+          </li>`;
+
+      }
+
+    }
+
+
+    else {
+
+      listaEval.innerHTML +=
+        `<li class="warning">
+        PIC Inicial (${picInicial} mmHg)
+        fuera de los rangos clínicos establecidos
+        en la simulación.
+        </li>`;
+
+    }
+
+  }
+
+
+  const ctxIcp =
+    document
+      .getElementById(
+        'wave-icp'
+      )
+      .getContext(
+        '2d'
+      );
+
+
+  const ctxAbp =
+    document
+      .getElementById(
+        'wave-abp'
+      )
+      .getContext(
+        '2d'
+      );
+
+
+  const ctxEcg =
+    document
+      .getElementById(
+        'wave-ecg'
+      )
+      .getContext(
+        '2d'
+      );
+
+
+  function resize(){
+
+    [
+      ctxIcp,
+      ctxAbp,
+      ctxEcg
+    ]
+    .forEach(
+      c => {
+
+        const cv =
+          c.canvas;
+
+
+        const r =
+          cv.parentElement
+            .getBoundingClientRect();
+
+
+        cv.width =
+          r.width
+          *
+          devicePixelRatio;
+
+
+        cv.height =
+          r.height
+          *
+          devicePixelRatio;
+
+
+        c.setTransform(
+          devicePixelRatio,
+          0,
+          0,
+          devicePixelRatio,
+          0,
+          0
+        );
+
+      }
+    );
+
+  }
+
+
+  resize();
+
+
+  window
+    .addEventListener(
+      'resize',
+      resize
+    );
+
+
+  const bufLen =
+    300;
+
+
+  const bufIcp =
+    new Array(
+      bufLen
+    )
+    .fill(
+      0.3
+    );
+
+
+  const bufAbp =
+    new Array(
+      bufLen
+    )
+    .fill(
+      0.5
+    );
+
+
+  const bufEcg =
+    new Array(
+      bufLen
+    )
+    .fill(
+      0.35
+    );
+
+
+  function icpPulse(
+    phase,
+    p1h,
+    p2h,
+    p3h
+  ){
+
+    const g =
+      (
+        c,
+        w,
+        h
+      ) =>
+      h
+      *
+      Math.exp(
+        -Math.pow(
+          (phase - c)
+          /
+          w,
+          2
+        )
+      );
+
+
+    return (
+      0.08
+      +
+      g(
+        0.12,
+        0.06,
+        p1h
+      )
+      +
+      g(
+        0.28,
+        0.07,
+        p2h
+      )
+      +
+      g(
+        0.48,
+        0.09,
+        p3h
+      )
+      *
+      0.7
+      -
+      g(
+        0.35,
+        0.02,
+        0.15
+      )
+    );
+
+  }
+
+
+  function abpPulse(
+    phase
+  ){
+
+    const g =
+      (
+        c,
+        w,
+        h
+      ) =>
+      h
+      *
+      Math.exp(
+        -Math.pow(
+          (phase - c)
+          /
+          w,
+          2
+        )
+      );
+
+
+    return (
+      0.05
+      +
+      g(
+        0.10,
+        0.05,
+        0.95
+      )
+      +
+      g(
+        0.30,
+        0.04,
+        -0.18
+      )
+      +
+      g(
+        0.42,
+        0.09,
+        0.28
+      )
+    );
+
+  }
+
+
+  function ecgPulse(
+    phase
+  ){
+
+    const g =
+      (
+        c,
+        w,
+        h
+      ) =>
+      h
+      *
+      Math.exp(
+        -Math.pow(
+          (phase - c)
+          /
+          w,
+          2
+        )
+      );
+
+
+    return (
+      0.35
+      +
+      g(
+        0.10,
+        0.020,
+        0.08
+      )
+      -
+      g(
+        0.16,
+        0.008,
+        0.10
+      )
+      +
+      g(
+        0.18,
+        0.010,
+        0.55
+      )
+      -
+      g(
+        0.20,
+        0.010,
+        0.18
+      )
+      +
+      g(
+        0.42,
+        0.050,
+        0.15
+      )
+    );
+
+  }
+
+
+  let beatPhase =
+    0;
+
+
+  function stepSimulation(
+    dt
+  ){
+
+    state.t +=
+      dt;
+
+
+    if (
+      state
+        .escenarioFinalizado
+    ) {
+
+      let dif =
+        state.picObjetivoFinal
+        -
+        state.icpBase;
+
+
+      if (
+        Math.abs(
+          dif
+        )
+        >
+        0.1
+      ) {
+
+        state.icpBase +=
+          Math.sign(
+            dif
+          )
+          *
+          2.0
+          *
+          dt;
+
+      }
+
+      else {
+
+        state.icpBase =
+          state.picObjetivoFinal;
+
+
+        if (
+          !state
+            .reportShown
+        ) {
+
+          state.reportShown =
+            true;
+
+
+          let pamActual =
+            Math.round(
+              state.abpDia
+              +
+              (
+                state.abpSys
+                -
+                state.abpDia
+              )
+              /
+              3
+            );
+
+
+          mostrarReporteFinal(
+            state.temp,
+            pamActual,
+            Math.round(
+              state.anguloMeasured
+            ),
+            state.drenajeMeasured,
+            Math.round(
+              state.icpBase
+            ),
+            state.picInicialMeasured
+          );
+
+        }
+
+      }
+
+    }
+
+    else {
+
+      const target =
+        Number.isFinite(
+          state.icpMeasured
+        )
+          ?
+          state.icpMeasured
+          :
+          (
+            state.picInicialMeasured
+            ||
+            12
+          );
+
+
+      state.icpBase =
+        target;
+
+    }
+
+
+    let p1 =
+      0.85;
+
+
+    let p2 =
+      0.55;
+
+
+    let p3 =
+      0.35;
+
+
+    if (
+      state.icpBase
+      >=
+      20
+    ) {
+
+      p1 =
+        0.55;
+
+
+      p2 =
+        0.95;
+
+
+      p3 =
+        0.75;
+
+    }
+
+
+    beatPhase +=
+      (
+        dt
+        *
+        (
+          state.hr
+          /
+          60
+        )
+      )
+      /
+      1.5;
+
+
+    if (
+      beatPhase
+      >
+      1
+    ) {
+
+      beatPhase -=
+        1;
+
+    }
+
+
+    const icpAmp =
+      icpPulse(
+        beatPhase,
+        p1,
+        p2,
+        p3
+      );
+
+
+    const icpWaveVal =
+      state.icpBase
+      +
+      (
+        icpAmp
+        -
+        0.08
+      )
+      *
+      10.0;
+
+
+    const icpNorm =
+      Math.max(
+        0,
+        Math.min(
+          1,
+          icpWaveVal
+          /
+          40
+        )
+      );
+
+
+    const abpAmp =
+      abpPulse(
+        beatPhase
+      );
+
+
+    const abpVal =
+      state.abpDia
+      +
+      abpAmp
+      *
+      (
+        state.abpSys
+        -
+        state.abpDia
+      );
+
+
+    const abpNorm =
+      Math.max(
+        0,
+        Math.min(
+          1,
+          abpVal
+          /
+          160
+        )
+      );
+
+
+    const ecgNorm =
+      ecgPulse(
+        beatPhase
+      );
+
+
+    if (
+      !state.frozen
+    ) {
+
+      bufIcp.push(
+        icpNorm
+      );
+
+      bufIcp.shift();
+
+
+      bufAbp.push(
+        abpNorm
+      );
+
+      bufAbp.shift();
+
+
+      bufEcg.push(
+        ecgNorm
+      );
+
+      bufEcg.shift();
+
+    }
+
+  }
+
+
+  function drawTrace(
+    ctx,
+    canvas,
+    buf,
+    color
+  ){
+
+    const w =
+      canvas.clientWidth;
+
+
+    const h =
+      canvas.clientHeight;
+
+
+    ctx.clearRect(
+      0,
+      0,
+      w,
+      h
+    );
+
+
+    ctx.strokeStyle =
+      'rgba(255,255,255,0.035)';
+
+
+    ctx.lineWidth =
+      1;
+
+
+    for(
+      let x = 0;
+      x < w;
+      x += 40
+    ){
+
+      ctx.beginPath();
+
+      ctx.moveTo(
+        x,
+        0
+      );
+
+      ctx.lineTo(
+        x,
+        h
+      );
+
+      ctx.stroke();
+
+    }
+
+
+    for(
+      let y = 0;
+      y < h;
+      y += 30
+    ){
+
+      ctx.beginPath();
+
+      ctx.moveTo(
+        0,
+        y
+      );
+
+      ctx.lineTo(
+        w,
+        y
+      );
+
+      ctx.stroke();
+
+    }
+
+
+    ctx.beginPath();
+
+
+    ctx.lineWidth =
+      2;
+
+
+    ctx.strokeStyle =
+      color;
+
+
+    const stepX =
+      w
+      /
+      (
+        buf.length
+        -
+        1
+      );
+
+
+    for(
+      let i = 0;
+      i < buf.length;
+      i++
+    ){
+
+      const x =
+        i
+        *
+        stepX;
+
+
+      const y =
+        h
+        -
+        buf[i]
+        *
+        h
+        *
+        0.85
+        -
+        h
+        *
+        0.08;
+
+
+      if (
+        i === 0
+      ) {
+
+        ctx.moveTo(
+          x,
+          y
+        );
+
+      }
+
+      else {
+
+        ctx.lineTo(
+          x,
+          y
+        );
+
+      }
+
+    }
+
+
+    ctx.stroke();
+
+
+    const sweepX =
+      (
+        performance.now()
+        /
+        18
+      )
+      %
+      w;
+
+
+    const grad =
+      ctx.createLinearGradient(
+        sweepX - 24,
+        0,
+        sweepX,
+        0
+      );
+
+
+    grad.addColorStop(
+      0,
+      'rgba(5,8,12,0)'
+    );
+
+
+    grad.addColorStop(
+      1,
+      'rgba(5,8,12,0.9)'
+    );
+
+
+    ctx.fillStyle =
+      grad;
+
+
+    ctx.fillRect(
+      sweepX - 24,
+      0,
+      24,
+      h
+    );
+
+  }
+
+
+  function updateNumerics(){
+
+    const icp =
+      Math.round(
+        state.icpBase
+      );
+
+
+    const pam =
+      Math.round(
+        state.abpDia
+        +
+        (
+          state.abpSys
+          -
+          state.abpDia
+        )
+        /
+        3
+      );
+
+
+    const cpp =
+      Math.round(
+        pam
+        -
+        icp
+      );
+
+
+    document
+      .getElementById(
+        'icp-val'
+      )
+      .textContent =
+      icp;
+
+
+    document
+      .getElementById(
+        'cpp-val'
+      )
+      .textContent =
+      cpp;
+
+
+    document
+      .getElementById(
+        'abp-val'
+      )
+      .textContent =
+      pam;
+
+
+    document
+      .getElementById(
+        'temp-val'
+      )
+      .textContent =
+      state.temp
+        .toFixed(1);
+
+
+    document
+      .getElementById(
+        'abp-sub'
+      )
+      .textContent =
+      state.abpSys
+      +
+      '/'
+      +
+      state.abpDia
+      +
+      ' mmHg';
+
+
+    const icpCard =
+      document
+        .getElementById(
+          'icp-card'
+        );
+
+
+    icpCard
+      .classList
+      .toggle(
+        'alarming',
+        icp > 22
+      );
+
+
+    icpCard
+      .querySelector(
+        '.num-sub'
+      )
+      .textContent =
+      icp > 22
+        ?
+        '⚠️ ¡HTE! (>22)'
+        :
+        (
+          icp >= 20
+            ?
+            '⚠️ Límite Alto (≥20)'
+            :
+            'Onda: P1>P2>P3'
+        );
+
+
+    const cppCard =
+      document
+        .getElementById(
+          'cpp-card'
+        );
+
+
+    cppCard
+      .classList
+      .toggle(
+        'alarming',
+        cpp < 60
+        ||
+        cpp > 120
+      );
+
+
+    cppCard
+      .querySelector(
+        '.num-sub'
+      )
+      .textContent =
+      cpp < 50
+        ?
+        '⚠️ ISQUEMIA (<50)'
+        :
+        (
+          cpp < 60
+            ?
+            '⚠️ RIESGO (<60)'
+            :
+            'PPC Óptima'
+        );
+
+  }
+
+
+  let last =
+    performance.now();
+
+
+  function loop(
+    now
+  ){
+
+    const dt =
+      Math.min(
+        0.05,
+        (
+          now
+          -
+          last
+        )
+        /
+        1000
+      );
+
+
+    last =
+      now;
+
+
+    stepSimulation(
+      dt
+    );
+
+
+    drawTrace(
+      ctxIcp,
+      ctxIcp.canvas,
+      bufIcp,
+      getComputedStyle(
+        document.documentElement
+      )
+      .getPropertyValue(
+        '--icp'
+      )
+      .trim()
+    );
+
+
+    drawTrace(
+      ctxAbp,
+      ctxAbp.canvas,
+      bufAbp,
+      getComputedStyle(
+        document.documentElement
+      )
+      .getPropertyValue(
+        '--abp'
+      )
+      .trim()
+    );
+
+
+    drawTrace(
+      ctxEcg,
+      ctxEcg.canvas,
+      bufEcg,
+      getComputedStyle(
+        document.documentElement
+      )
+      .getPropertyValue(
+        '--ecg'
+      )
+      .trim()
+    );
+
+
+    updateNumerics();
+
+
+    requestAnimationFrame(
+      loop
+    );
+
+  }
+
+
+  requestAnimationFrame(
+    loop
+  );
+
+})();
+
+</script>
+
+</body>
+</html>
