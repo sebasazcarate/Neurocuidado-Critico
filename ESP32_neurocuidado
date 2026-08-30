@@ -1,0 +1,1378 @@
+#include <Wire.h>
+#include <WiFi.h>
+#include <WebSocketsServer.h>
+#include <ArduinoJson.h>
+
+
+WebSocketsServer webSocket = WebSocketsServer(5000);
+
+bool conexionPCEstablecida = false;
+
+uint32_t tiempoUltimoEnvioPC = 0;
+
+const uint32_t intervaloEnvioPC_ms = 1000;
+
+
+#define directionPin 26
+#define stepPin 25
+
+#define switchLeft 19
+#define switchRight 18
+
+#define relayPin 12
+
+#define RELAY_ON  LOW
+#define RELAY_OFF HIGH
+
+
+#define SDA_PIN 21
+#define SCL_PIN 22
+
+const uint8_t MPU_ADDRESS = 0x68;
+
+
+const int pinSensor = 34;
+
+const int muestrasPresion = 100;
+
+const float factor_mmHg_por_V = 35.717;
+const float pendiente = 1.0627;
+const float intercepto = -0.0692;
+
+
+const float toleranciaPresion = 0.50;
+
+
+const bool izquierdaAumentaPresion = true;
+
+
+const uint32_t intervaloCambioStep_us = 1000;
+
+enum EstadoMotor {
+
+  MOTOR_DETENIDO,
+
+  MOTOR_DERECHA,
+
+  MOTOR_IZQUIERDA
+
+};
+
+EstadoMotor estadoMotor = MOTOR_DETENIDO;
+
+bool estadoStep = LOW;
+
+uint32_t tiempoUltimoStep = 0;
+
+
+uint32_t sumaPresion_mV = 0;
+
+int contadorMuestrasPresion = 0;
+
+uint32_t tiempoUltimaMuestraPresion = 0;
+
+const uint32_t intervaloMuestraPresion_us = 2000;
+
+float voltajeESP32 = 0;
+
+float voltajeCorregido = 0;
+
+float presion_mmHg = 0;
+
+bool presionDisponible = false;
+
+
+float temperaturaPaciente = 36.5;
+
+bool temperaturaRecibida = false;
+
+float anguloEstable = 0.0;
+
+float PICObjetivo = 0;
+
+
+float picInicialDrenaje = 0;
+
+uint32_t tiempoInicioDrenaje = 0;
+
+const uint32_t deltaT_Drenaje_ms = 5000;
+
+float tasaDrenaje_ml_h = 0.0;
+
+
+float RateRoll = 0;
+
+float RatePitch = 0;
+
+float RateYaw = 0;
+
+
+const float RateCalibrationRoll =
+  -1.789807f;
+
+const float RateCalibrationPitch =
+  0.121160f;
+
+const float RateCalibrationYaw =
+  -4.624726f;
+
+
+const float AngleCalibrationRoll =
+  -0.576532f;
+
+const float AngleCalibrationPitch =
+  -1.596584f;
+
+
+float AccX = 0;
+
+float AccY = 0;
+
+float AccZ = 0;
+
+float AngleRoll = 0;
+
+float AnglePitch = 0;
+
+
+float KalmanAngleRoll = 0;
+
+float KalmanUncertaintyAngleRoll = 4;
+
+float KalmanAnglePitch = 0;
+
+float KalmanUncertaintyAnglePitch = 4;
+
+const float tiempoMuestreoKalman = 0.004;
+
+
+uint32_t tiempoUltimoMPU = 0;
+
+const uint32_t intervaloMPU_us = 4000;
+
+
+uint32_t tiempoUltimaImpresion = 0;
+
+const uint32_t intervaloImpresion_ms = 100;
+
+
+void actualizarPICObjetivo();
+
+void evaluarDrenaje();
+
+float obtenerAnguloEstable();
+
+void detenerMotor();
+
+void moverDerecha();
+
+void moverIzquierda();
+
+void aumentarPresion();
+
+void disminuirPresion();
+
+void generarPasosMotor();
+
+void verificarFinalesDeCarrera();
+
+void controlarPresion();
+
+void actualizarMPU6050();
+
+void actualizarPresion();
+
+void mostrarDatos();
+
+void transmitirDatosWS();
+
+bool configurarMPU6050();
+
+
+void detenerMotor() {
+
+  estadoMotor = MOTOR_DETENIDO;
+
+  digitalWrite(
+    stepPin,
+    LOW
+  );
+
+  digitalWrite(
+    relayPin,
+    RELAY_OFF
+  );
+}
+
+
+void moverDerecha() {
+
+
+  if (
+    digitalRead(switchRight)
+    == LOW
+  ) {
+
+    detenerMotor();
+
+    return;
+  }
+
+
+  if (
+    estadoMotor !=
+    MOTOR_DERECHA
+  ) {
+
+    estadoMotor =
+      MOTOR_DERECHA;
+
+
+    digitalWrite(
+      directionPin,
+      HIGH
+    );
+
+
+    digitalWrite(
+      relayPin,
+      RELAY_OFF
+    );
+  }
+}
+
+
+void moverIzquierda() {
+
+
+  if (
+    digitalRead(switchLeft)
+    == LOW
+  ) {
+
+    detenerMotor();
+
+    return;
+  }
+
+
+  if (
+    estadoMotor !=
+    MOTOR_IZQUIERDA
+  ) {
+
+    estadoMotor =
+      MOTOR_IZQUIERDA;
+
+
+    digitalWrite(
+      directionPin,
+      LOW
+    );
+
+
+    digitalWrite(
+      relayPin,
+      RELAY_ON
+    );
+  }
+}
+
+
+void aumentarPresion() {
+
+  if (
+    izquierdaAumentaPresion
+  ) {
+
+    moverIzquierda();
+
+  }
+
+  else {
+
+    moverDerecha();
+
+  }
+}
+
+
+void disminuirPresion() {
+
+  if (
+    izquierdaAumentaPresion
+  ) {
+
+    moverDerecha();
+
+  }
+
+  else {
+
+    moverIzquierda();
+
+  }
+}
+
+
+void generarPasosMotor() {
+
+  if (
+    estadoMotor ==
+    MOTOR_DETENIDO
+  ) {
+
+    return;
+  }
+
+
+  uint32_t tiempoActual =
+    micros();
+
+
+  if (
+    tiempoActual -
+    tiempoUltimoStep >=
+    intervaloCambioStep_us
+  ) {
+
+    tiempoUltimoStep =
+      tiempoActual;
+
+
+    estadoStep =
+      !estadoStep;
+
+
+    digitalWrite(
+      stepPin,
+      estadoStep
+    );
+  }
+}
+
+
+void verificarFinalesDeCarrera() {
+
+
+  if (
+    estadoMotor ==
+    MOTOR_IZQUIERDA
+    &&
+    digitalRead(switchLeft)
+    == LOW
+  ) {
+
+    detenerMotor();
+  }
+
+
+  if (
+    estadoMotor ==
+    MOTOR_DERECHA
+    &&
+    digitalRead(switchRight)
+    == LOW
+  ) {
+
+    detenerMotor();
+  }
+}
+
+
+void controlarPresion() {
+
+  float limiteInferior =
+    PICObjetivo -
+    toleranciaPresion;
+
+
+  float limiteSuperior =
+    PICObjetivo +
+    toleranciaPresion;
+
+
+  if (
+    presion_mmHg <
+    limiteInferior
+  ) {
+
+    aumentarPresion();
+  }
+
+
+  else if (
+    presion_mmHg >
+    limiteSuperior
+  ) {
+
+    disminuirPresion();
+  }
+
+
+  else {
+
+    detenerMotor();
+  }
+}
+
+
+float obtenerAnguloEstable() {
+
+  return KalmanAnglePitch;
+}
+
+
+void evaluarDrenaje() {
+
+  if (
+    millis() -
+    tiempoInicioDrenaje >=
+    deltaT_Drenaje_ms
+  ) {
+
+    float picFinalDrenaje =
+      presion_mmHg;
+
+
+    float deltaPIC =
+      picInicialDrenaje -
+      picFinalDrenaje;
+
+
+    if (
+      deltaPIC > 0
+    ) {
+
+      tasaDrenaje_ml_h =
+        deltaPIC * 3.5;
+
+    }
+
+    else {
+
+      tasaDrenaje_ml_h =
+        0.0;
+    }
+
+
+    picInicialDrenaje =
+      presion_mmHg;
+
+
+    tiempoInicioDrenaje =
+      millis();
+  }
+}
+
+
+void actualizarPICObjetivo() {
+
+  anguloEstable =
+    obtenerAnguloEstable();
+
+
+  float picBase =
+    10.0
+    +
+    (
+      anguloEstable *
+      0.15
+    )
+    +
+    (
+      (
+        temperaturaPaciente -
+        36.5
+      )
+      *
+      1.2
+    );
+
+
+  if (
+    isnan(
+      tasaDrenaje_ml_h
+    )
+  ) {
+
+
+    PICObjetivo =
+      picBase -
+      5.0;
+  }
+
+
+  else if (
+    tasaDrenaje_ml_h <= 0
+  ) {
+
+
+    PICObjetivo =
+      picBase;
+  }
+
+
+  else if (
+    tasaDrenaje_ml_h <= 20
+  ) {
+
+
+    PICObjetivo =
+      picBase -
+      2.0;
+  }
+
+
+  else {
+
+
+    PICObjetivo =
+      picBase -
+      6.0;
+  }
+
+
+  if (
+    PICObjetivo < 0
+  ) {
+
+    PICObjetivo = 0;
+  }
+}
+
+
+bool escribirRegistroMPU(
+  uint8_t registro,
+  uint8_t valor
+) {
+
+  Wire.beginTransmission(
+    MPU_ADDRESS
+  );
+
+  Wire.write(
+    registro
+  );
+
+  Wire.write(
+    valor
+  );
+
+
+  return
+    Wire.endTransmission()
+    == 0;
+}
+
+
+bool configurarMPU6050() {
+
+
+  if (
+    !escribirRegistroMPU(
+      0x6B,
+      0x00
+    )
+  ) {
+
+    return false;
+  }
+
+
+  delay(100);
+
+
+  if (
+    !escribirRegistroMPU(
+      0x1A,
+      0x05
+    )
+  ) {
+
+    return false;
+  }
+
+
+  if (
+    !escribirRegistroMPU(
+      0x1C,
+      0x10
+    )
+  ) {
+
+    return false;
+  }
+
+
+  if (
+    !escribirRegistroMPU(
+      0x1B,
+      0x08
+    )
+  ) {
+
+    return false;
+  }
+
+
+  return true;
+}
+
+
+bool leerMPU6050() {
+
+  Wire.beginTransmission(
+    MPU_ADDRESS
+  );
+
+  Wire.write(
+    0x3B
+  );
+
+
+  if (
+    Wire.endTransmission(false)
+    != 0
+  ) {
+
+    return false;
+  }
+
+
+  if (
+    Wire.requestFrom(
+      MPU_ADDRESS,
+      (uint8_t)14
+    )
+    != 14
+  ) {
+
+    return false;
+  }
+
+
+  int16_t AccXLSB =
+    (
+      (int16_t)Wire.read()
+      << 8
+    )
+    |
+    Wire.read();
+
+
+  int16_t AccYLSB =
+    (
+      (int16_t)Wire.read()
+      << 8
+    )
+    |
+    Wire.read();
+
+
+  int16_t AccZLSB =
+    (
+      (int16_t)Wire.read()
+      << 8
+    )
+    |
+    Wire.read();
+
+
+  Wire.read();
+  Wire.read();
+
+
+  int16_t GyroX =
+    (
+      (int16_t)Wire.read()
+      << 8
+    )
+    |
+    Wire.read();
+
+
+  int16_t GyroY =
+    (
+      (int16_t)Wire.read()
+      << 8
+    )
+    |
+    Wire.read();
+
+
+  int16_t GyroZ =
+    (
+      (int16_t)Wire.read()
+      << 8
+    )
+    |
+    Wire.read();
+
+
+  AccX =
+    (float)AccXLSB /
+    4096.0;
+
+
+  AccY =
+    (float)AccYLSB /
+    4096.0;
+
+
+  AccZ =
+    (float)AccZLSB /
+    4096.0;
+
+
+  RateRoll =
+    (float)GyroX /
+    65.5;
+
+
+  RatePitch =
+    (float)GyroY /
+    65.5;
+
+
+  RateYaw =
+    (float)GyroZ /
+    65.5;
+
+
+  AngleRoll =
+    atan2(
+      AccY,
+      sqrt(
+        AccX * AccX
+        +
+        AccZ * AccZ
+      )
+    )
+    *
+    180.0
+    /
+    PI;
+
+
+  AnglePitch =
+    -atan2(
+      AccX,
+      sqrt(
+        AccY * AccY
+        +
+        AccZ * AccZ
+      )
+    )
+    *
+    180.0
+    /
+    PI;
+
+
+  return true;
+}
+
+
+void kalman_1d(
+  float &KalmanState,
+  float &KalmanUncertainty,
+  float KalmanInput,
+  float KalmanMeasurement
+) {
+
+
+  KalmanState =
+    KalmanState
+    +
+    tiempoMuestreoKalman
+    *
+    KalmanInput;
+
+
+  KalmanUncertainty =
+    KalmanUncertainty
+    +
+    tiempoMuestreoKalman
+    *
+    tiempoMuestreoKalman
+    *
+    16.0;
+
+
+  float KalmanGain =
+    KalmanUncertainty
+    /
+    (
+      KalmanUncertainty
+      +
+      9.0
+    );
+
+
+  KalmanState =
+    KalmanState
+    +
+    KalmanGain
+    *
+    (
+      KalmanMeasurement
+      -
+      KalmanState
+    );
+
+
+  KalmanUncertainty =
+    (
+      1.0 -
+      KalmanGain
+    )
+    *
+    KalmanUncertainty;
+}
+
+
+void actualizarMPU6050() {
+
+  if (
+    micros() -
+    tiempoUltimoMPU <
+    intervaloMPU_us
+  ) {
+
+    return;
+  }
+
+
+  tiempoUltimoMPU +=
+    intervaloMPU_us;
+
+
+  if (
+    !leerMPU6050()
+  ) {
+
+    return;
+  }
+
+
+  RateRoll -=
+    RateCalibrationRoll;
+
+
+  RatePitch -=
+    RateCalibrationPitch;
+
+
+  RateYaw -=
+    RateCalibrationYaw;
+
+
+  AngleRoll -=
+    AngleCalibrationRoll;
+
+
+  AnglePitch -=
+    AngleCalibrationPitch;
+
+
+  kalman_1d(
+    KalmanAngleRoll,
+    KalmanUncertaintyAngleRoll,
+    RateRoll,
+    AngleRoll
+  );
+
+
+  kalman_1d(
+    KalmanAnglePitch,
+    KalmanUncertaintyAnglePitch,
+    RatePitch,
+    AnglePitch
+  );
+}
+
+
+void actualizarPresion() {
+
+  if (
+    micros() -
+    tiempoUltimaMuestraPresion <
+    intervaloMuestraPresion_us
+  ) {
+
+    return;
+  }
+
+
+  tiempoUltimaMuestraPresion +=
+    intervaloMuestraPresion_us;
+
+
+  sumaPresion_mV +=
+    analogReadMilliVolts(
+      pinSensor
+    );
+
+
+  contadorMuestrasPresion++;
+
+
+  if (
+    contadorMuestrasPresion >=
+    muestrasPresion
+  ) {
+
+    float promedio_mV =
+      sumaPresion_mV
+      /
+      (float)muestrasPresion;
+
+
+    voltajeESP32 =
+      promedio_mV /
+      1000.0;
+
+
+    voltajeCorregido =
+      pendiente
+      *
+      voltajeESP32
+      +
+      intercepto;
+
+
+    if (
+      voltajeCorregido < 0
+    ) {
+
+      voltajeCorregido = 0;
+    }
+
+
+    presion_mmHg =
+      voltajeCorregido
+      *
+      factor_mmHg_por_V;
+
+
+    sumaPresion_mV = 0;
+
+    contadorMuestrasPresion = 0;
+
+    presionDisponible = true;
+  }
+}
+
+
+void webSocketEvent(
+  uint8_t num,
+  WStype_t type,
+  uint8_t * payload,
+  size_t length
+) {
+
+  switch(type) {
+
+
+    case WStype_DISCONNECTED:
+
+      Serial.printf(
+        "[%u] Cliente desconectado\n",
+        num
+      );
+
+      conexionPCEstablecida =
+        false;
+
+      break;
+
+
+    case WStype_CONNECTED:
+    {
+
+      IPAddress ip =
+        webSocket.remoteIP(num);
+
+
+      Serial.printf(
+        "[%u] Conectado desde %d.%d.%d.%d\n",
+        num,
+        ip[0],
+        ip[1],
+        ip[2],
+        ip[3]
+      );
+
+
+      conexionPCEstablecida =
+        true;
+
+      break;
+    }
+
+
+    case WStype_TEXT:
+    {
+
+      StaticJsonDocument<200>
+        doc;
+
+
+      DeserializationError error =
+        deserializeJson(
+          doc,
+          payload
+        );
+
+
+      if (
+        !error
+        &&
+        doc.containsKey(
+          "TEMPERATURA"
+        )
+      ) {
+
+        temperaturaPaciente =
+          doc["TEMPERATURA"];
+
+
+        temperaturaRecibida =
+          true;
+
+
+        Serial.printf(
+          "Temperatura recibida: %.2f °C\n",
+          temperaturaPaciente
+        );
+      }
+
+
+      break;
+    }
+
+
+    default:
+
+      break;
+  }
+}
+
+
+void transmitirDatosWS() {
+
+  if (
+    !conexionPCEstablecida
+  ) {
+
+    return;
+  }
+
+
+  uint32_t tiempoActual =
+    millis();
+
+
+  if (
+    tiempoActual -
+    tiempoUltimoEnvioPC <
+    intervaloEnvioPC_ms
+  ) {
+
+    return;
+  }
+
+
+  tiempoUltimoEnvioPC =
+    tiempoActual;
+
+
+  StaticJsonDocument<200>
+    doc;
+
+
+  doc["PIC"] =
+    presion_mmHg;
+
+
+  doc["ANGULO"] =
+    anguloEstable;
+
+
+  String jsonString;
+
+
+  serializeJson(
+    doc,
+    jsonString
+  );
+
+
+  webSocket.broadcastTXT(
+    jsonString
+  );
+}
+
+
+void mostrarDatos() {
+
+  Serial.print(
+    "T: "
+  );
+
+  Serial.print(
+    temperaturaPaciente,
+    1
+  );
+
+  Serial.print(
+    " °C"
+  );
+
+
+  Serial.print(
+    " | Ángulo: "
+  );
+
+  Serial.print(
+    anguloEstable,
+    1
+  );
+
+  Serial.print(
+    " °"
+  );
+
+
+  Serial.print(
+    " | Drenaje: "
+  );
+
+  Serial.print(
+    tasaDrenaje_ml_h,
+    1
+  );
+
+  Serial.print(
+    " ml/h"
+  );
+
+
+  Serial.print(
+    " | PIC Obj: "
+  );
+
+  Serial.print(
+    PICObjetivo,
+    1
+  );
+
+  Serial.print(
+    " mmHg"
+  );
+
+
+  Serial.print(
+    " | PIC física: "
+  );
+
+  Serial.print(
+    presion_mmHg,
+    1
+  );
+
+  Serial.println(
+    " mmHg"
+  );
+}
+
+
+void setup() {
+
+  Serial.begin(
+    115200
+  );
+
+
+  pinMode(
+    directionPin,
+    OUTPUT
+  );
+
+
+  pinMode(
+    stepPin,
+    OUTPUT
+  );
+
+
+  digitalWrite(
+    stepPin,
+    LOW
+  );
+
+
+  pinMode(
+    relayPin,
+    OUTPUT
+  );
+
+
+  digitalWrite(
+    relayPin,
+    RELAY_OFF
+  );
+
+
+  pinMode(
+    switchLeft,
+    INPUT_PULLUP
+  );
+
+
+  pinMode(
+    switchRight,
+    INPUT_PULLUP
+  );
+
+
+  analogReadResolution(
+    12
+  );
+
+
+  analogSetPinAttenuation(
+    pinSensor,
+    ADC_11db
+  );
+
+
+  Wire.begin(
+    SDA_PIN,
+    SCL_PIN
+  );
+
+
+  Wire.setClock(
+    400000
+  );
+
+
+  if (
+    !configurarMPU6050()
+  ) {
+
+    Serial.println(
+      "Error al configurar MPU6050"
+    );
+
+  }
+
+  else {
+
+    Serial.println(
+      "MPU6050 configurado correctamente"
+    );
+  }
+
+
+  WiFi.softAP(
+    "Neurocuidado Critico",
+    "12345678"
+  );
+
+
+  Serial.println(
+    "Red Wi-Fi generada: Neurocuidado Critico"
+  );
+
+
+  Serial.print(
+    "IP del servidor: "
+  );
+
+
+  Serial.println(
+    WiFi.softAPIP()
+  );
+
+
+  webSocket.begin();
+
+
+  webSocket.onEvent(
+    webSocketEvent
+  );
+
+
+  Serial.println(
+    "Servidor WebSocket en puerto 5000"
+  );
+
+
+  tiempoInicioDrenaje =
+    millis();
+}
+
+
+void loop() {
+
+
+  webSocket.loop();
+
+
+  if (
+    !temperaturaRecibida
+  ) {
+
+    return;
+  }
+
+
+  actualizarMPU6050();
+
+
+  evaluarDrenaje();
+
+
+  actualizarPICObjetivo();
+
+
+  actualizarPresion();
+
+
+  if (
+    presionDisponible
+  ) {
+
+    presionDisponible =
+      false;
+
+
+    controlarPresion();
+  }
+
+
+  generarPasosMotor();
+
+
+  verificarFinalesDeCarrera();
+
+
+  transmitirDatosWS();
+
+
+  if (
+    millis() -
+    tiempoUltimaImpresion >=
+    intervaloImpresion_ms
+  ) {
+
+    tiempoUltimaImpresion =
+      millis();
+
+
+    mostrarDatos();
+  }
+}
