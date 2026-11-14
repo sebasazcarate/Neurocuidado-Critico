@@ -2,1377 +2,759 @@
 #include <WiFi.h>
 #include <WebSocketsServer.h>
 #include <ArduinoJson.h>
+#include <math.h>
 
+// =====================================================
+// RED WI-FI
+// =====================================================
+const char* nombreWiFi = "neurocuidado";
+const char* claveWiFi = "12345678";
 
-WebSocketsServer webSocket = WebSocketsServer(5000);
+// =====================================================
+// WEBSOCKET
+// =====================================================
+WebSocketsServer webSocket(5000);
+bool banderaFinalEnviada = false;
 
-bool conexionPCEstablecida = false;
-
-uint32_t tiempoUltimoEnvioPC = 0;
-
-const uint32_t intervaloEnvioPC_ms = 1000;
-
-
-#define directionPin 26
-#define stepPin 25
-
-#define switchLeft 19
-#define switchRight 18
-
-#define relayPin 12
-
-#define RELAY_ON  LOW
-#define RELAY_OFF HIGH
-
-
-#define SDA_PIN 21
-#define SCL_PIN 22
-
-const uint8_t MPU_ADDRESS = 0x68;
-
-
-const int pinSensor = 34;
-
-const int muestrasPresion = 100;
-
-const float factor_mmHg_por_V = 35.717;
-const float pendiente = 1.0627;
-const float intercepto = -0.0692;
-
-
-const float toleranciaPresion = 0.50;
-
-
-const bool izquierdaAumentaPresion = true;
-
-
-const uint32_t intervaloCambioStep_us = 1000;
-
-enum EstadoMotor {
-
-  MOTOR_DETENIDO,
-
-  MOTOR_DERECHA,
-
-  MOTOR_IZQUIERDA
-
+// =====================================================
+// ESTADOS DEL SISTEMA Y SEGURIDAD
+// =====================================================
+enum EstadoSistema {
+  ESPERANDO_TEMPERATURA,
+  MIDIENDO_ANGULO,
+  CONTROLANDO_PRESION,
+  MIDIENDO_DRENAJE,
+  AJUSTANDO_PIC_FINAL,
+  PIC_FINAL_ALCANZADA,
+  RETORNANDO_A_INICIO
 };
 
-EstadoMotor estadoMotor = MOTOR_DETENIDO;
+EstadoSistema estadoSistema = ESPERANDO_TEMPERATURA;
 
-bool estadoStep = LOW;
+// BANDERA DE ENCLAVAMIENTO (INTERLOCK)
+// Impide iniciar una sesión nueva hasta tocar el switch final
+bool listoParaNuevaSesion = true; 
 
-uint32_t tiempoUltimoStep = 0;
+// =====================================================
+// TEMPERATURA
+// =====================================================
+float temperaturaPaciente = 0.0;
 
+// =====================================================
+// MPU6050
+// =====================================================
+#define SDA_PIN 21
+#define SCL_PIN 22
+const uint8_t MPU_ADDRESS = 0x68;
 
-uint32_t sumaPresion_mV = 0;
+float AccX = 0, AccY = 0, AccZ = 0;
+float RateRoll = 0, AngleRoll = 0;
 
-int contadorMuestrasPresion = 0;
+// Calibración MPU6050
+const float RateCalibrationRoll = -1.789807f;
+const float AngleCalibrationRoll = -0.576532f;
 
-uint32_t tiempoUltimaMuestraPresion = 0;
+// Filtro Kalman
+float KalmanAngleRoll = 0.0;
+float KalmanUncertaintyAngleRoll = 4.0;
 
-const uint32_t intervaloMuestraPresion_us = 2000;
-
-float voltajeESP32 = 0;
-
-float voltajeCorregido = 0;
-
-float presion_mmHg = 0;
-
-bool presionDisponible = false;
-
-
-float temperaturaPaciente = 36.5;
-
-bool temperaturaRecibida = false;
-
-float anguloEstable = 0.0;
-
-float PICObjetivo = 0;
-
-
-float picInicialDrenaje = 0;
-
-uint32_t tiempoInicioDrenaje = 0;
-
-const uint32_t deltaT_Drenaje_ms = 5000;
-
-float tasaDrenaje_ml_h = 0.0;
-
-
-float RateRoll = 0;
-
-float RatePitch = 0;
-
-float RateYaw = 0;
-
-
-const float RateCalibrationRoll =
-  -1.789807f;
-
-const float RateCalibrationPitch =
-  0.121160f;
-
-const float RateCalibrationYaw =
-  -4.624726f;
-
-
-const float AngleCalibrationRoll =
-  -0.576532f;
-
-const float AngleCalibrationPitch =
-  -1.596584f;
-
-
-float AccX = 0;
-
-float AccY = 0;
-
-float AccZ = 0;
-
-float AngleRoll = 0;
-
-float AnglePitch = 0;
-
-
-float KalmanAngleRoll = 0;
-
-float KalmanUncertaintyAngleRoll = 4;
-
-float KalmanAnglePitch = 0;
-
-float KalmanUncertaintyAnglePitch = 4;
-
-const float tiempoMuestreoKalman = 0.004;
-
-
+// Temporización MPU6050
+const uint32_t intervaloMPU_us = 1000;
 uint32_t tiempoUltimoMPU = 0;
 
-const uint32_t intervaloMPU_us = 4000;
+// Medición del ángulo
+const uint32_t tiempoEstabilizacion_ms = 15000;
+uint32_t tiempoInicioMedicion = 0;
+float anguloEstable = 0.0;
+
+// =====================================================
+// PIC OBJETIVO INICIAL
+// =====================================================
+float PICAngulo = 0.0;
+float deltaPICT = 0.0;
+float PICObjetivo = 0.0;
+
+// =====================================================
+// SENSOR DE PRESIÓN MPX10DP
+// =====================================================
+#define pinSensor 34
+const int muestrasPresion = 100;
+float presionActual = 0.0;
+
+// Temporización Sensor de Presión
+const uint32_t intervaloLecturaPIC_ms = 20;
+uint32_t ultimaLecturaPIC = 0;
+bool nuevaPICDisponible = false;
+const float toleranciaPIC = 0.5;
+
+// =====================================================
+// MOTOR, SWITCHES Y RELÉ
+// =====================================================
+#define directionPin 26
+#define stepPin 25
+#define switchLeft 19
+#define switchRight 18
+#define relayPin 12
+
+#define RELAY_ON HIGH
+#define RELAY_OFF LOW
+#define DIR_AUMENTAR LOW
+#define DIR_DISMINUIR HIGH
+
+enum EstadoMotor {
+  MOTOR_DETENIDO,
+  MOTOR_AUMENTANDO,
+  MOTOR_DISMINUYENDO
+};
+EstadoMotor estadoMotor = MOTOR_DETENIDO;
+
+const uint32_t intervaloStep_us = 5000; // ~100 pulsos/s
+uint32_t tiempoUltimoStep = 0;
+bool estadoStep = LOW;
+
+// =====================================================
+// DRENAJE
+// =====================================================
+const uint32_t tiempoMedicionDrenaje_ms = 3UL * 60UL * 1000UL; // 3 minutos
+uint32_t tiempoInicioDrenaje = 0;
+float picInicialDrenaje = 0.0;
+float picFinalDrenajeMedida = 0.0;
+float deltaPICDrenaje = 0.0;
+float volumenDrenado_mL = 0.0;
+float drenaje_mL_h = 0.0;
+bool drenajeCalculado = false;
+
+// =====================================================
+// PIC FINAL
+// =====================================================
+float PICFinal = 0.0;
+float PICReferenciaFinal = 0.0;
+const float pasoPICFinal = 0.10;
+const uint32_t intervaloCambioPICFinal_ms = 500;
+uint32_t ultimoCambioPICFinal = 0;
+
+// =====================================================
+// ENVÍO HTML Y MONITOR SERIE
+// =====================================================
+const uint32_t intervaloEnvioPIC_ms = 100;
+uint32_t ultimoEnvioPIC = 0;
+const uint32_t intervaloMonitorPIC_ms = 100;
+uint32_t ultimaImpresionPIC = 0;
 
 
-uint32_t tiempoUltimaImpresion = 0;
-
-const uint32_t intervaloImpresion_ms = 100;
-
-
-void actualizarPICObjetivo();
-
-void evaluarDrenaje();
-
-float obtenerAnguloEstable();
-
-void detenerMotor();
-
-void moverDerecha();
-
-void moverIzquierda();
-
-void aumentarPresion();
-
-void disminuirPresion();
-
-void generarPasosMotor();
-
-void verificarFinalesDeCarrera();
-
-void controlarPresion();
-
-void actualizarMPU6050();
-
-void actualizarPresion();
-
-void mostrarDatos();
-
-void transmitirDatosWS();
-
-bool configurarMPU6050();
-
-
-void detenerMotor() {
-
-  estadoMotor = MOTOR_DETENIDO;
-
-  digitalWrite(
-    stepPin,
-    LOW
-  );
-
-  digitalWrite(
-    relayPin,
-    RELAY_OFF
-  );
+// =====================================================
+// FUNCIONES MPU6050
+// =====================================================
+bool escribirRegistroMPU(uint8_t registro, uint8_t valor) {
+  Wire.beginTransmission(MPU_ADDRESS);
+  Wire.write(registro);
+  Wire.write(valor);
+  return Wire.endTransmission() == 0;
 }
-
-
-void moverDerecha() {
-
-
-  if (
-    digitalRead(switchRight)
-    == LOW
-  ) {
-
-    detenerMotor();
-
-    return;
-  }
-
-
-  if (
-    estadoMotor !=
-    MOTOR_DERECHA
-  ) {
-
-    estadoMotor =
-      MOTOR_DERECHA;
-
-
-    digitalWrite(
-      directionPin,
-      HIGH
-    );
-
-
-    digitalWrite(
-      relayPin,
-      RELAY_OFF
-    );
-  }
-}
-
-
-void moverIzquierda() {
-
-
-  if (
-    digitalRead(switchLeft)
-    == LOW
-  ) {
-
-    detenerMotor();
-
-    return;
-  }
-
-
-  if (
-    estadoMotor !=
-    MOTOR_IZQUIERDA
-  ) {
-
-    estadoMotor =
-      MOTOR_IZQUIERDA;
-
-
-    digitalWrite(
-      directionPin,
-      LOW
-    );
-
-
-    digitalWrite(
-      relayPin,
-      RELAY_ON
-    );
-  }
-}
-
-
-void aumentarPresion() {
-
-  if (
-    izquierdaAumentaPresion
-  ) {
-
-    moverIzquierda();
-
-  }
-
-  else {
-
-    moverDerecha();
-
-  }
-}
-
-
-void disminuirPresion() {
-
-  if (
-    izquierdaAumentaPresion
-  ) {
-
-    moverDerecha();
-
-  }
-
-  else {
-
-    moverIzquierda();
-
-  }
-}
-
-
-void generarPasosMotor() {
-
-  if (
-    estadoMotor ==
-    MOTOR_DETENIDO
-  ) {
-
-    return;
-  }
-
-
-  uint32_t tiempoActual =
-    micros();
-
-
-  if (
-    tiempoActual -
-    tiempoUltimoStep >=
-    intervaloCambioStep_us
-  ) {
-
-    tiempoUltimoStep =
-      tiempoActual;
-
-
-    estadoStep =
-      !estadoStep;
-
-
-    digitalWrite(
-      stepPin,
-      estadoStep
-    );
-  }
-}
-
-
-void verificarFinalesDeCarrera() {
-
-
-  if (
-    estadoMotor ==
-    MOTOR_IZQUIERDA
-    &&
-    digitalRead(switchLeft)
-    == LOW
-  ) {
-
-    detenerMotor();
-  }
-
-
-  if (
-    estadoMotor ==
-    MOTOR_DERECHA
-    &&
-    digitalRead(switchRight)
-    == LOW
-  ) {
-
-    detenerMotor();
-  }
-}
-
-
-void controlarPresion() {
-
-  float limiteInferior =
-    PICObjetivo -
-    toleranciaPresion;
-
-
-  float limiteSuperior =
-    PICObjetivo +
-    toleranciaPresion;
-
-
-  if (
-    presion_mmHg <
-    limiteInferior
-  ) {
-
-    aumentarPresion();
-  }
-
-
-  else if (
-    presion_mmHg >
-    limiteSuperior
-  ) {
-
-    disminuirPresion();
-  }
-
-
-  else {
-
-    detenerMotor();
-  }
-}
-
-
-float obtenerAnguloEstable() {
-
-  return KalmanAnglePitch;
-}
-
-
-void evaluarDrenaje() {
-
-  if (
-    millis() -
-    tiempoInicioDrenaje >=
-    deltaT_Drenaje_ms
-  ) {
-
-    float picFinalDrenaje =
-      presion_mmHg;
-
-
-    float deltaPIC =
-      picInicialDrenaje -
-      picFinalDrenaje;
-
-
-    if (
-      deltaPIC > 0
-    ) {
-
-      tasaDrenaje_ml_h =
-        deltaPIC * 3.5;
-
-    }
-
-    else {
-
-      tasaDrenaje_ml_h =
-        0.0;
-    }
-
-
-    picInicialDrenaje =
-      presion_mmHg;
-
-
-    tiempoInicioDrenaje =
-      millis();
-  }
-}
-
-
-void actualizarPICObjetivo() {
-
-  anguloEstable =
-    obtenerAnguloEstable();
-
-
-  float picBase =
-    10.0
-    +
-    (
-      anguloEstable *
-      0.15
-    )
-    +
-    (
-      (
-        temperaturaPaciente -
-        36.5
-      )
-      *
-      1.2
-    );
-
-
-  if (
-    isnan(
-      tasaDrenaje_ml_h
-    )
-  ) {
-
-
-    PICObjetivo =
-      picBase -
-      5.0;
-  }
-
-
-  else if (
-    tasaDrenaje_ml_h <= 0
-  ) {
-
-
-    PICObjetivo =
-      picBase;
-  }
-
-
-  else if (
-    tasaDrenaje_ml_h <= 20
-  ) {
-
-
-    PICObjetivo =
-      picBase -
-      2.0;
-  }
-
-
-  else {
-
-
-    PICObjetivo =
-      picBase -
-      6.0;
-  }
-
-
-  if (
-    PICObjetivo < 0
-  ) {
-
-    PICObjetivo = 0;
-  }
-}
-
-
-bool escribirRegistroMPU(
-  uint8_t registro,
-  uint8_t valor
-) {
-
-  Wire.beginTransmission(
-    MPU_ADDRESS
-  );
-
-  Wire.write(
-    registro
-  );
-
-  Wire.write(
-    valor
-  );
-
-
-  return
-    Wire.endTransmission()
-    == 0;
-}
-
 
 bool configurarMPU6050() {
-
-
-  if (
-    !escribirRegistroMPU(
-      0x6B,
-      0x00
-    )
-  ) {
-
-    return false;
-  }
-
-
+  if (!escribirRegistroMPU(0x6B, 0x00)) return false;
   delay(100);
-
-
-  if (
-    !escribirRegistroMPU(
-      0x1A,
-      0x05
-    )
-  ) {
-
-    return false;
-  }
-
-
-  if (
-    !escribirRegistroMPU(
-      0x1C,
-      0x10
-    )
-  ) {
-
-    return false;
-  }
-
-
-  if (
-    !escribirRegistroMPU(
-      0x1B,
-      0x08
-    )
-  ) {
-
-    return false;
-  }
-
-
+  if (!escribirRegistroMPU(0x19, 0x00)) return false;
+  if (!escribirRegistroMPU(0x1A, 0x05)) return false;
+  if (!escribirRegistroMPU(0x1C, 0x10)) return false; // ±8 g
+  if (!escribirRegistroMPU(0x1B, 0x08)) return false; // ±500 °/s
   return true;
 }
-
 
 bool leerMPU6050() {
+  Wire.beginTransmission(MPU_ADDRESS);
+  Wire.write(0x3B);
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom(MPU_ADDRESS, (uint8_t)14) != 14) return false;
 
-  Wire.beginTransmission(
-    MPU_ADDRESS
-  );
+  int16_t AccXLSB = ((int16_t)Wire.read() << 8) | Wire.read();
+  int16_t AccYLSB = ((int16_t)Wire.read() << 8) | Wire.read();
+  int16_t AccZLSB = ((int16_t)Wire.read() << 8) | Wire.read();
+  Wire.read(); Wire.read(); // Descartar Temperatura
+  int16_t GyroX = ((int16_t)Wire.read() << 8) | Wire.read();
+  Wire.read(); Wire.read(); // Descartar Y
+  Wire.read(); Wire.read(); // Descartar Z
 
-  Wire.write(
-    0x3B
-  );
-
-
-  if (
-    Wire.endTransmission(false)
-    != 0
-  ) {
-
-    return false;
-  }
-
-
-  if (
-    Wire.requestFrom(
-      MPU_ADDRESS,
-      (uint8_t)14
-    )
-    != 14
-  ) {
-
-    return false;
-  }
-
-
-  int16_t AccXLSB =
-    (
-      (int16_t)Wire.read()
-      << 8
-    )
-    |
-    Wire.read();
-
-
-  int16_t AccYLSB =
-    (
-      (int16_t)Wire.read()
-      << 8
-    )
-    |
-    Wire.read();
-
-
-  int16_t AccZLSB =
-    (
-      (int16_t)Wire.read()
-      << 8
-    )
-    |
-    Wire.read();
-
-
-  Wire.read();
-  Wire.read();
-
-
-  int16_t GyroX =
-    (
-      (int16_t)Wire.read()
-      << 8
-    )
-    |
-    Wire.read();
-
-
-  int16_t GyroY =
-    (
-      (int16_t)Wire.read()
-      << 8
-    )
-    |
-    Wire.read();
-
-
-  int16_t GyroZ =
-    (
-      (int16_t)Wire.read()
-      << 8
-    )
-    |
-    Wire.read();
-
-
-  AccX =
-    (float)AccXLSB /
-    4096.0;
-
-
-  AccY =
-    (float)AccYLSB /
-    4096.0;
-
-
-  AccZ =
-    (float)AccZLSB /
-    4096.0;
-
-
-  RateRoll =
-    (float)GyroX /
-    65.5;
-
-
-  RatePitch =
-    (float)GyroY /
-    65.5;
-
-
-  RateYaw =
-    (float)GyroZ /
-    65.5;
-
-
-  AngleRoll =
-    atan2(
-      AccY,
-      sqrt(
-        AccX * AccX
-        +
-        AccZ * AccZ
-      )
-    )
-    *
-    180.0
-    /
-    PI;
-
-
-  AnglePitch =
-    -atan2(
-      AccX,
-      sqrt(
-        AccY * AccY
-        +
-        AccZ * AccZ
-      )
-    )
-    *
-    180.0
-    /
-    PI;
-
+  AccX = (float)AccXLSB / 4096.0;
+  AccY = (float)AccYLSB / 4096.0;
+  AccZ = (float)AccZLSB / 4096.0;
+  RateRoll = (float)GyroX / 65.5;
+  AngleRoll = atan2(AccY, sqrt(AccX * AccX + AccZ * AccZ)) * 180.0 / PI;
 
   return true;
 }
 
-
-void kalman_1d(
-  float &KalmanState,
-  float &KalmanUncertainty,
-  float KalmanInput,
-  float KalmanMeasurement
-) {
-
-
-  KalmanState =
-    KalmanState
-    +
-    tiempoMuestreoKalman
-    *
-    KalmanInput;
-
-
-  KalmanUncertainty =
-    KalmanUncertainty
-    +
-    tiempoMuestreoKalman
-    *
-    tiempoMuestreoKalman
-    *
-    16.0;
-
-
-  float KalmanGain =
-    KalmanUncertainty
-    /
-    (
-      KalmanUncertainty
-      +
-      9.0
-    );
-
-
-  KalmanState =
-    KalmanState
-    +
-    KalmanGain
-    *
-    (
-      KalmanMeasurement
-      -
-      KalmanState
-    );
-
-
-  KalmanUncertainty =
-    (
-      1.0 -
-      KalmanGain
-    )
-    *
-    KalmanUncertainty;
+void kalman_1d(float &KalmanState, float &KalmanUncertainty, float KalmanInput, float KalmanMeasurement, float dt) {
+  KalmanState = KalmanState + dt * KalmanInput;
+  KalmanUncertainty = KalmanUncertainty + dt * dt * 16.0;
+  float KalmanGain = KalmanUncertainty / (KalmanUncertainty + 9.0);
+  KalmanState = KalmanState + KalmanGain * (KalmanMeasurement - KalmanState);
+  KalmanUncertainty = (1.0 - KalmanGain) * KalmanUncertainty;
 }
-
 
 void actualizarMPU6050() {
+  uint32_t ahora = micros();
+  if (ahora - tiempoUltimoMPU < intervaloMPU_us) return;
+  float dt = (ahora - tiempoUltimoMPU) / 1000000.0f;
+  tiempoUltimoMPU = ahora;
 
-  if (
-    micros() -
-    tiempoUltimoMPU <
-    intervaloMPU_us
-  ) {
+  if (!leerMPU6050()) return;
 
-    return;
-  }
-
-
-  tiempoUltimoMPU +=
-    intervaloMPU_us;
-
-
-  if (
-    !leerMPU6050()
-  ) {
-
-    return;
-  }
-
-
-  RateRoll -=
-    RateCalibrationRoll;
-
-
-  RatePitch -=
-    RateCalibrationPitch;
-
-
-  RateYaw -=
-    RateCalibrationYaw;
-
-
-  AngleRoll -=
-    AngleCalibrationRoll;
-
-
-  AnglePitch -=
-    AngleCalibrationPitch;
-
-
-  kalman_1d(
-    KalmanAngleRoll,
-    KalmanUncertaintyAngleRoll,
-    RateRoll,
-    AngleRoll
-  );
-
-
-  kalman_1d(
-    KalmanAnglePitch,
-    KalmanUncertaintyAnglePitch,
-    RatePitch,
-    AnglePitch
-  );
+  RateRoll -= RateCalibrationRoll;
+  AngleRoll -= AngleCalibrationRoll;
+  kalman_1d(KalmanAngleRoll, KalmanUncertaintyAngleRoll, RateRoll, AngleRoll, dt);
 }
 
+// =====================================================
+// MATEMÁTICAS DEL MODELO
+// =====================================================
+float calcularPICAngulo(float angulo) {
+  if (angulo < 30.0) return 20.0;
+  else if (angulo < 60.0) return 25.0 - (angulo / 6.0);
+  else return 15.0;
+}
 
-void actualizarPresion() {
+float calcularDeltaPICT(float temperatura) {
+  if (temperatura >= 34.5 && temperatura < 36.5) return 36.5 - temperatura;
+  else if (temperatura >= 36.5 && temperatura <= 37.5) return 0.0;
+  else if (temperatura > 37.5 && temperatura <= 39.0) return 3.0 * (temperatura - 37.5);
+  return 0.0;
+}
 
-  if (
-    micros() -
-    tiempoUltimaMuestraPresion <
-    intervaloMuestraPresion_us
-  ) {
+float convertirDeltaPICAvolumen(float deltaPIC) {
+  // Ecuación: ΔV = 0.0106(ΔPIC)^2 + 0.0252(ΔPIC) + 0.1348
+  return (0.0106 * deltaPIC * deltaPIC) + (0.0252 * deltaPIC) + 0.1348;
+}
 
-    return;
+float calcularPICFinal(float picInicial, float drenaje) {
+  float picD0 = 0.9890 * picInicial + 0.8873;
+  float picD20 = 0.6180 * picInicial - 2.1676;
+  float picMayor20 = 0.6372 * picInicial - 4.4962;
+  if (picMayor20 < 0) picMayor20 = 0;
+
+  if (drenaje <= 10) return picD0;
+  if (drenaje < 25.0) {
+    float factor = drenaje / 20.0;
+    return picD0 + factor * (picD20 - picD0);
+  }
+  if (drenaje <= 25.01) return picD20;
+  return picMayor20;
+}
+
+// =====================================================
+// LECTURA PRESIÓN ACTUALIZADA (POR PARTES)
+// =====================================================
+float leerPIC() {
+  uint32_t suma_mV = 0;
+  for (int i = 0; i < muestrasPresion; i++) {
+    suma_mV += analogReadMilliVolts(pinSensor);
+  }
+  float promedio_mV = suma_mV / (float)muestrasPresion;
+  float voltajeESP32 = promedio_mV / 1000.0;
+
+  float presionCalculada = 0.0;
+
+  // Función a tramos según la curva de calibración final
+  if (voltajeESP32 < 0.15205) {
+    presionCalculada = 503.0092 * voltajeESP32 - 66.4691;
+  } else {
+    presionCalculada = 155.2195 * voltajeESP32 - 13.5867;
   }
 
+  if (presionCalculada < 0) presionCalculada = 0;
 
-  tiempoUltimaMuestraPresion +=
-    intervaloMuestraPresion_us;
+  return presionCalculada;
+}
 
+void actualizarPIC() {
+  if (millis() - ultimaLecturaPIC < intervaloLecturaPIC_ms) return;
+  ultimaLecturaPIC = millis();
+  presionActual = leerPIC();
+  nuevaPICDisponible = true;
+}
 
-  sumaPresion_mV +=
-    analogReadMilliVolts(
-      pinSensor
-    );
+// =====================================================
+// CONTROL MOTOR Y HARDWARE
+// =====================================================
+void detenerMotor() {
+  estadoMotor = MOTOR_DETENIDO;
+  digitalWrite(stepPin, LOW);
+  estadoStep = LOW;
+  // digitalWrite(relayPin, RELAY_OFF); // <-- COMENTADO PARA EVITAR EL CASTAÑEO
+}
 
+void aumentarPresion() {
+  digitalWrite(relayPin, RELAY_OFF);
+  if (digitalRead(switchLeft) == LOW) {
+    detenerMotor();
+    return;
+  }
+  estadoMotor = MOTOR_AUMENTANDO;
+  digitalWrite(directionPin, DIR_AUMENTAR);
+}
 
-  contadorMuestrasPresion++;
+void disminuirPresion() {
+  if (digitalRead(switchRight) == LOW) {
+    detenerMotor();
+    return;
+  }
+  estadoMotor = MOTOR_DISMINUYENDO;
+  digitalWrite(directionPin, DIR_DISMINUIR);
+  digitalWrite(relayPin, RELAY_ON);
+}
 
-
-  if (
-    contadorMuestrasPresion >=
-    muestrasPresion
-  ) {
-
-    float promedio_mV =
-      sumaPresion_mV
-      /
-      (float)muestrasPresion;
-
-
-    voltajeESP32 =
-      promedio_mV /
-      1000.0;
-
-
-    voltajeCorregido =
-      pendiente
-      *
-      voltajeESP32
-      +
-      intercepto;
-
-
-    if (
-      voltajeCorregido < 0
-    ) {
-
-      voltajeCorregido = 0;
-    }
-
-
-    presion_mmHg =
-      voltajeCorregido
-      *
-      factor_mmHg_por_V;
-
-
-    sumaPresion_mV = 0;
-
-    contadorMuestrasPresion = 0;
-
-    presionDisponible = true;
+void generarPasosMotor() {
+  if (estadoMotor == MOTOR_DETENIDO) return;
+  uint32_t ahora = micros();
+  if (ahora - tiempoUltimoStep >= intervaloStep_us) {
+    tiempoUltimoStep = ahora;
+    estadoStep = !estadoStep;
+    digitalWrite(stepPin, estadoStep);
   }
 }
 
+void verificarSwitches() {
+  if (estadoMotor == MOTOR_AUMENTANDO && digitalRead(switchLeft) == LOW) {
+    detenerMotor();
+    digitalWrite(relayPin, RELAY_OFF); // <-- AÑADIDO: Seguridad extra
+  }
+  if (estadoMotor == MOTOR_DISMINUYENDO && digitalRead(switchRight) == LOW) {
+    detenerMotor();
+    digitalWrite(relayPin, RELAY_OFF); // <-- AÑADIDO: Seguridad extra
+  }
+}
 
-void webSocketEvent(
-  uint8_t num,
-  WStype_t type,
-  uint8_t * payload,
-  size_t length
-) {
+// =====================================================
+// RUTINAS DE REINICIO Y RETORNO
+// =====================================================
+void reiniciarEscenario() {
+  detenerMotor();
+  digitalWrite(relayPin, RELAY_OFF); // <-- AÑADIDO: Apagado seguro al reiniciar
+  estadoSistema = ESPERANDO_TEMPERATURA;
+  temperaturaPaciente = 0.0;
 
-  switch(type) {
+  AccX = 0.0; AccY = 0.0; AccZ = 0.0;
+  RateRoll = 0.0; AngleRoll = 0.0;
+  KalmanAngleRoll = 0.0; KalmanUncertaintyAngleRoll = 4.0;
+  anguloEstable = 0.0; tiempoUltimoMPU = 0; tiempoInicioMedicion = 0;
 
+  PICAngulo = 0.0; deltaPICT = 0.0; PICObjetivo = 0.0;
+  presionActual = 0.0; ultimaLecturaPIC = 0; nuevaPICDisponible = false;
+
+  tiempoInicioDrenaje = 0; picInicialDrenaje = 0.0; picFinalDrenajeMedida = 0.0;
+  deltaPICDrenaje = 0.0; volumenDrenado_mL = 0.0; drenaje_mL_h = 0.0; drenajeCalculado = false;
+
+  PICFinal = 0.0; PICReferenciaFinal = 0.0; ultimoCambioPICFinal = 0;
+
+  estadoMotor = MOTOR_DETENIDO; estadoStep = LOW; tiempoUltimoStep = 0;
+  banderaFinalEnviada = false; ultimoEnvioPIC = 0; ultimaImpresionPIC = 0;
+
+  Serial.println("\n================================");
+  Serial.println("SISTEMA REINICIADO");
+  Serial.println("Estado: ESPERANDO_TEMPERATURA");
+  Serial.println("Cliente WebSocket permanece conectado");
+  Serial.println("================================");
+}
+
+void iniciarRetornoInicio() {
+  detenerMotor();
+  listoParaNuevaSesion = false; // Bloquea la recepción de nuevas temperaturas
+
+  Serial.println("\n================================");
+  Serial.println("FINALIZACION RECIBIDA DESDE HTML");
+  Serial.println("Iniciando retorno del motor...");
+
+  if (digitalRead(switchRight) == LOW) {
+    Serial.println("switchRight ya esta activado. No es necesario mover el motor.");
+    Serial.println("================================");
+    listoParaNuevaSesion = true; // Libera la bandera
+    reiniciarEscenario();
+    return;
+  }
+
+  digitalWrite(directionPin, DIR_DISMINUIR);
+  digitalWrite(relayPin, RELAY_ON);
+
+  estadoMotor = MOTOR_DISMINUYENDO;
+  estadoStep = LOW;
+  digitalWrite(stepPin, LOW);
+  tiempoUltimoStep = micros();
+  estadoSistema = RETORNANDO_A_INICIO;
+
+  Serial.println("Direccion: DISMINUIR");
+  Serial.println("Rele: ENCENDIDO");
+  Serial.println("Motor moviendose hacia switchRight...");
+  Serial.println("================================");
+}
+
+// =====================================================
+// WEBSOCKET: ENVIAR DATOS
+// =====================================================
+void enviarBanderaFinal() {
+  if (banderaFinalEnviada) return;
+  StaticJsonDocument<350> doc;
+
+  doc["FINALIZAR"] = true;
+  doc["PIC"] = presionActual;
+  doc["PIC_INICIAL"] = picInicialDrenaje;
+  doc["DELTA_PIC"] = deltaPICDrenaje;
+  doc["VOLUMEN_DRENADO"] = volumenDrenado_mL;
+  doc["DRENAJE"] = drenaje_mL_h;
+  doc["PIC_FINAL"] = PICFinal;
+  doc["ANGULO"] = anguloEstable;
+  doc["TEMPERATURA"] = temperaturaPaciente;
+
+  String mensaje;
+  serializeJson(doc, mensaje);
+  webSocket.broadcastTXT(mensaje);
+  banderaFinalEnviada = true;
+
+  Serial.println("\n================================");
+  Serial.println("BANDERA FINAL ENVIADA AL HTML");
+  Serial.println("================================");
+}
+
+void transmitirDatos() {
+  if (millis() - ultimoEnvioPIC < intervaloEnvioPIC_ms) return;
+  ultimoEnvioPIC = millis();
+
+  StaticJsonDocument<250> doc;
+  doc["PIC"] = presionActual;
+  if (drenajeCalculado) {
+    doc["DRENAJE"] = drenaje_mL_h;
+    doc["PIC_FINAL"] = PICFinal;
+  }
+
+  String mensaje;
+  serializeJson(doc, mensaje);
+  webSocket.broadcastTXT(mensaje);
+}
+
+// =====================================================
+// WEBSOCKET: RECIBIR EVENTOS
+// =====================================================
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+  switch (type) {
+    case WStype_CONNECTED:
+      Serial.println("Cliente conectado");
+      break;
 
     case WStype_DISCONNECTED:
-
-      Serial.printf(
-        "[%u] Cliente desconectado\n",
-        num
-      );
-
-      conexionPCEstablecida =
-        false;
-
+      Serial.println("Cliente desconectado");
       break;
-
-
-    case WStype_CONNECTED:
-    {
-
-      IPAddress ip =
-        webSocket.remoteIP(num);
-
-
-      Serial.printf(
-        "[%u] Conectado desde %d.%d.%d.%d\n",
-        num,
-        ip[0],
-        ip[1],
-        ip[2],
-        ip[3]
-      );
-
-
-      conexionPCEstablecida =
-        true;
-
-      break;
-    }
-
 
     case WStype_TEXT:
     {
+      StaticJsonDocument<200> doc;
+      DeserializationError error = deserializeJson(doc, payload, length);
+      if (error) { Serial.println("Error leyendo JSON"); return; }
 
-      StaticJsonDocument<200>
-        doc;
-
-
-      DeserializationError error =
-        deserializeJson(
-          doc,
-          payload
-        );
-
-
-      if (
-        !error
-        &&
-        doc.containsKey(
-          "TEMPERATURA"
-        )
-      ) {
-
-        temperaturaPaciente =
-          doc["TEMPERATURA"];
-
-
-        temperaturaRecibida =
-          true;
-
-
-        Serial.printf(
-          "Temperatura recibida: %.2f °C\n",
-          temperaturaPaciente
-        );
+      // 1. RECIBIR ORDEN DE ABORTO
+      if (doc.containsKey("FINALIZAR_ESCENARIO") && doc["FINALIZAR_ESCENARIO"] == true) {
+        iniciarRetornoInicio();
+        return;
       }
 
+      // 2. RECIBIR NUEVA TEMPERATURA
+      if (doc.containsKey("TEMPERATURA")) {
 
+        // --- AQUÍ ESTÁ TU BANDERA DE SEGURIDAD ---
+        if (!listoParaNuevaSesion) {
+          Serial.println("\n[SEGURIDAD] Denegado: Esperando que el motor toque el switch inicial.");
+
+          // NUEVO: Le avisamos a la interfaz web que estamos ocupados
+          webSocket.sendTXT(num, "{\"ALERTA\":\"OCUPADO\"}");
+
+          return; // Abortamos el proceso
+        }
+        if (estadoSistema == ESPERANDO_TEMPERATURA) {
+          temperaturaPaciente = doc["TEMPERATURA"];
+          banderaFinalEnviada = false;
+          drenajeCalculado = false;
+
+          Serial.print("\nTemperatura recibida: ");
+          Serial.print(temperaturaPaciente, 2); Serial.println(" °C");
+
+          KalmanAngleRoll = 0.0;
+          KalmanUncertaintyAngleRoll = 4.0;
+          tiempoInicioMedicion = millis();
+          tiempoUltimoMPU = micros();
+
+          estadoSistema = MIDIENDO_ANGULO;
+          Serial.println("\nMidiendo Roll durante 15 segundos...");
+        }
+      }
       break;
     }
-
-
     default:
-
       break;
   }
 }
 
+// =====================================================
+// MANEJO DE ESTADOS Y CONTROL
+// =====================================================
+void controlarPIC() {
+  if (presionActual > PICObjetivo + toleranciaPIC) { disminuirPresion(); return; }
+  if (presionActual < PICObjetivo - toleranciaPIC) { aumentarPresion(); return; }
 
-void transmitirDatosWS() {
+  detenerMotor();
+  digitalWrite(relayPin, RELAY_OFF);
 
-  if (
-    !conexionPCEstablecida
-  ) {
+  Serial.println("\n================================");
+  Serial.println("PIC OBJETIVO ALCANZADA");
+  Serial.print("PIC objetivo: "); Serial.print(PICObjetivo, 2); Serial.println(" mmHg");
+  Serial.print("PIC actual: "); Serial.print(presionActual, 2); Serial.println(" mmHg");
+  Serial.println("Rele: APAGADO");
+  Serial.println("================================");
 
-    return;
-  }
-
-
-  uint32_t tiempoActual =
-    millis();
-
-
-  if (
-    tiempoActual -
-    tiempoUltimoEnvioPC <
-    intervaloEnvioPC_ms
-  ) {
-
-    return;
-  }
-
-
-  tiempoUltimoEnvioPC =
-    tiempoActual;
-
-
-  StaticJsonDocument<200>
-    doc;
-
-
-  doc["PIC"] =
-    presion_mmHg;
-
-
-  doc["ANGULO"] =
-    anguloEstable;
-
-
-  String jsonString;
-
-
-  serializeJson(
-    doc,
-    jsonString
-  );
-
-
-  webSocket.broadcastTXT(
-    jsonString
-  );
+  iniciarMedicionDrenaje();
 }
 
+void iniciarMedicionDrenaje() {
+  detenerMotor();
+  picInicialDrenaje = presionActual;
+  tiempoInicioDrenaje = millis();
 
-void mostrarDatos() {
+  deltaPICDrenaje = 0.0; volumenDrenado_mL = 0.0; drenaje_mL_h = 0.0;
+  drenajeCalculado = false; banderaFinalEnviada = false;
 
-  Serial.print(
-    "T: "
-  );
+  Serial.println("\n================================");
+  Serial.println("INICIO MEDICION DE DRENAJE");
+  Serial.print("PIC inicial: "); Serial.print(picInicialDrenaje, 2); Serial.println(" mmHg");
+  Serial.println("Duracion: 3 minutos");
+  Serial.println("================================");
 
-  Serial.print(
-    temperaturaPaciente,
-    1
-  );
-
-  Serial.print(
-    " °C"
-  );
-
-
-  Serial.print(
-    " | Ángulo: "
-  );
-
-  Serial.print(
-    anguloEstable,
-    1
-  );
-
-  Serial.print(
-    " °"
-  );
-
-
-  Serial.print(
-    " | Drenaje: "
-  );
-
-  Serial.print(
-    tasaDrenaje_ml_h,
-    1
-  );
-
-  Serial.print(
-    " ml/h"
-  );
-
-
-  Serial.print(
-    " | PIC Obj: "
-  );
-
-  Serial.print(
-    PICObjetivo,
-    1
-  );
-
-  Serial.print(
-    " mmHg"
-  );
-
-
-  Serial.print(
-    " | PIC física: "
-  );
-
-  Serial.print(
-    presion_mmHg,
-    1
-  );
-
-  Serial.println(
-    " mmHg"
-  );
+  estadoSistema = MIDIENDO_DRENAJE;
 }
 
+void finalizarMedicionDrenaje() {
+  presionActual = leerPIC();
+  picFinalDrenajeMedida = presionActual;
 
+  deltaPICDrenaje = picInicialDrenaje - picFinalDrenajeMedida;
+  if (deltaPICDrenaje < 0) deltaPICDrenaje = 0;
+
+  volumenDrenado_mL = convertirDeltaPICAvolumen(deltaPICDrenaje);
+  drenaje_mL_h = volumenDrenado_mL * 20.0; // 3 minutos = factor de 20
+  PICFinal = calcularPICFinal(picInicialDrenaje, drenaje_mL_h);
+
+  PICReferenciaFinal = presionActual;
+  ultimoCambioPICFinal = millis();
+  drenajeCalculado = true;
+
+  Serial.println("\n================================");
+  Serial.println("RESULTADO DEL DRENAJE");
+  Serial.print("PIC inicial: "); Serial.print(picInicialDrenaje, 2); Serial.println(" mmHg");
+  Serial.print("PIC despues de 3 min: "); Serial.print(picFinalDrenajeMedida, 2); Serial.println(" mmHg");
+  Serial.print("Delta PIC: "); Serial.print(deltaPICDrenaje, 2); Serial.println(" mmHg");
+  Serial.print("Volumen drenado: "); Serial.print(volumenDrenado_mL, 2); Serial.println(" mL");
+  Serial.print("Drenaje: "); Serial.print(drenaje_mL_h, 2); Serial.println(" mL/h");
+  Serial.print("PIC FINAL: "); Serial.print(PICFinal, 2); Serial.println(" mmHg");
+  Serial.println("================================");
+
+  enviarBanderaFinal();
+  estadoSistema = AJUSTANDO_PIC_FINAL;
+}
+
+void actualizarReferenciaPICFinal() {
+  if (millis() - ultimoCambioPICFinal < intervaloCambioPICFinal_ms) return;
+  ultimoCambioPICFinal = millis();
+
+  if (PICReferenciaFinal < PICFinal) {
+    PICReferenciaFinal += pasoPICFinal;
+    if (PICReferenciaFinal > PICFinal) PICReferenciaFinal = PICFinal;
+  } else if (PICReferenciaFinal > PICFinal) {
+    PICReferenciaFinal -= pasoPICFinal;
+    if (PICReferenciaFinal < PICFinal) PICReferenciaFinal = PICFinal;
+  }
+}
+
+void controlarPICFinal() {
+  if (presionActual > PICReferenciaFinal + toleranciaPIC) { disminuirPresion(); return; }
+  if (presionActual < PICReferenciaFinal - toleranciaPIC) { aumentarPresion(); return; }
+  detenerMotor();
+}
+
+void mostrarPICMonitor() {
+  if (millis() - ultimaImpresionPIC < intervaloMonitorPIC_ms) return;
+  ultimaImpresionPIC = millis();
+
+  Serial.print("PIC actual: ");
+  Serial.print(presionActual, 2);
+
+  if (estadoSistema == CONTROLANDO_PRESION) {
+    Serial.print(" | Objetivo: "); Serial.print(PICObjetivo, 2);
+  } else if (estadoSistema == MIDIENDO_DRENAJE) {
+    float tiempoTranscurrido_s = (millis() - tiempoInicioDrenaje) / 1000.0f;
+    Serial.print(" | PIC inicial: "); Serial.print(picInicialDrenaje, 2);
+    Serial.print(" | Tiempo: "); Serial.print(tiempoTranscurrido_s, 1); Serial.print(" s");
+  } else if (estadoSistema == AJUSTANDO_PIC_FINAL) {
+    Serial.print(" | Referencia: "); Serial.print(PICReferenciaFinal, 2);
+    Serial.print(" | PIC Final: "); Serial.print(PICFinal, 2);
+  } else if (estadoSistema == PIC_FINAL_ALCANZADA) {
+    Serial.print(" | PIC Final: "); Serial.print(PICFinal, 2);
+  }
+  Serial.println(" mmHg");
+}
+
+// =====================================================
+// SETUP
+// =====================================================
 void setup() {
+  Serial.begin(115200);
 
-  Serial.begin(
-    115200
-  );
+  // MOTOR, SWITCHES Y RELÉ
+  pinMode(directionPin, OUTPUT);
+  pinMode(stepPin, OUTPUT);
+  digitalWrite(stepPin, LOW);
+  pinMode(switchLeft, INPUT_PULLUP);
+  pinMode(switchRight, INPUT_PULLUP);
+  pinMode(relayPin, OUTPUT);
+  digitalWrite(relayPin, RELAY_OFF);
 
+  // SENSOR MPX10DP
+  analogReadResolution(12);
+  analogSetPinAttenuation(pinSensor, ADC_11db);
 
-  pinMode(
-    directionPin,
-    OUTPUT
-  );
+  // MPU6050
+  Wire.begin(SDA_PIN, SCL_PIN);
+  Wire.setClock(400000);
+  if (configurarMPU6050()) Serial.println("MPU6050 configurado correctamente");
+  else Serial.println("ERROR MPU6050");
 
+  // WI-FI AP
+  WiFi.softAP(nombreWiFi, claveWiFi);
+  Serial.println("\nRed Wi-Fi creada");
+  Serial.print("Nombre: "); Serial.println(nombreWiFi);
+  Serial.print("IP: "); Serial.println(WiFi.softAPIP());
 
-  pinMode(
-    stepPin,
-    OUTPUT
-  );
-
-
-  digitalWrite(
-    stepPin,
-    LOW
-  );
-
-
-  pinMode(
-    relayPin,
-    OUTPUT
-  );
-
-
-  digitalWrite(
-    relayPin,
-    RELAY_OFF
-  );
-
-
-  pinMode(
-    switchLeft,
-    INPUT_PULLUP
-  );
-
-
-  pinMode(
-    switchRight,
-    INPUT_PULLUP
-  );
-
-
-  analogReadResolution(
-    12
-  );
-
-
-  analogSetPinAttenuation(
-    pinSensor,
-    ADC_11db
-  );
-
-
-  Wire.begin(
-    SDA_PIN,
-    SCL_PIN
-  );
-
-
-  Wire.setClock(
-    400000
-  );
-
-
-  if (
-    !configurarMPU6050()
-  ) {
-
-    Serial.println(
-      "Error al configurar MPU6050"
-    );
-
-  }
-
-  else {
-
-    Serial.println(
-      "MPU6050 configurado correctamente"
-    );
-  }
-
-
-  WiFi.softAP(
-    "Neurocuidado Critico",
-    "12345678"
-  );
-
-
-  Serial.println(
-    "Red Wi-Fi generada: Neurocuidado Critico"
-  );
-
-
-  Serial.print(
-    "IP del servidor: "
-  );
-
-
-  Serial.println(
-    WiFi.softAPIP()
-  );
-
-
+  // WEBSOCKET
   webSocket.begin();
-
-
-  webSocket.onEvent(
-    webSocketEvent
-  );
-
-
-  Serial.println(
-    "Servidor WebSocket en puerto 5000"
-  );
-
-
-  tiempoInicioDrenaje =
-    millis();
+  webSocket.onEvent(webSocketEvent);
+  Serial.println("WebSocket puerto 5000\n");
+  Serial.println("Esperando temperatura...");
 }
 
-
+// =====================================================
+// LOOP PRINCIPAL
+// =====================================================
 void loop() {
-
-
   webSocket.loop();
 
+  switch (estadoSistema) {
+    case ESPERANDO_TEMPERATURA:
+      detenerMotor();
+      break;
 
-  if (
-    !temperaturaRecibida
-  ) {
+    case MIDIENDO_ANGULO:
+      detenerMotor();
+      actualizarMPU6050();
 
-    return;
-  }
+      // Monitor de Roll cada 50ms
+      static uint32_t ultimaImpresionRoll = 0;
+      if (millis() - ultimaImpresionRoll >= 50) {
+        ultimaImpresionRoll = millis();
+        Serial.print("Roll: "); Serial.print(KalmanAngleRoll, 2); Serial.println(" °");
+      }
 
+      if (millis() - tiempoInicioMedicion >= tiempoEstabilizacion_ms) {
+        anguloEstable = -KalmanAngleRoll;
+        PICAngulo = calcularPICAngulo(anguloEstable);
+        deltaPICT = calcularDeltaPICT(temperaturaPaciente);
+        PICObjetivo = PICAngulo + deltaPICT;
 
-  actualizarMPU6050();
+        Serial.println("\n================================");
+        Serial.print("Angulo: "); Serial.print(anguloEstable, 2); Serial.println(" °");
+        Serial.print("Temperatura: "); Serial.print(temperaturaPaciente, 2); Serial.println(" °C");
+        Serial.print("PIC por angulo: "); Serial.print(PICAngulo, 2); Serial.println(" mmHg");
+        Serial.print("Delta PIC temp: "); Serial.print(deltaPICT, 2); Serial.println(" mmHg");
+        Serial.print("PIC OBJETIVO: "); Serial.print(PICObjetivo, 2); Serial.println(" mmHg");
+        Serial.println("================================");
 
+        ultimaLecturaPIC = 0; ultimaImpresionPIC = 0; ultimoEnvioPIC = 0; nuevaPICDisponible = false;
+        estadoSistema = CONTROLANDO_PRESION;
+      }
+      break;
 
-  evaluarDrenaje();
+    case CONTROLANDO_PRESION:
+      actualizarPIC();
+      mostrarPICMonitor();
+      transmitirDatos();
 
+      if (nuevaPICDisponible) {
+        nuevaPICDisponible = false;
+        controlarPIC();
+      }
+      generarPasosMotor();
+      verificarSwitches();
+      break;
 
-  actualizarPICObjetivo();
+    case MIDIENDO_DRENAJE:
+      detenerMotor();
+      actualizarPIC();
+      mostrarPICMonitor();
+      transmitirDatos();
 
+      if (millis() - tiempoInicioDrenaje >= tiempoMedicionDrenaje_ms) {
+        finalizarMedicionDrenaje();
+      }
+      break;
 
-  actualizarPresion();
+    case AJUSTANDO_PIC_FINAL:
+      actualizarPIC();
+      actualizarReferenciaPICFinal();
+      mostrarPICMonitor();
+      transmitirDatos();
 
+      if (nuevaPICDisponible) {
+        nuevaPICDisponible = false;
+        controlarPICFinal();
+      }
+      generarPasosMotor();
+      verificarSwitches();
 
-  if (
-    presionDisponible
-  ) {
+      if (fabs(PICReferenciaFinal - PICFinal) < 0.01 && fabs(presionActual - PICFinal) <= toleranciaPIC) {
+        detenerMotor();
+        digitalWrite(relayPin, RELAY_OFF); // <-- AÑADIDO: Apaga el relé al lograr la PIC final
+        
+        Serial.println("\n================================");
+        Serial.println("PIC FINAL ALCANZADA");
+        Serial.print("Drenaje: "); Serial.print(drenaje_mL_h, 2); Serial.println(" mL/h");
+        Serial.print("PIC final calculada: "); Serial.print(PICFinal, 2); Serial.println(" mmHg");
+        Serial.print("PIC fisica: "); Serial.print(presionActual, 2); Serial.println(" mmHg");
+        Serial.println("================================");
 
-    presionDisponible =
-      false;
+        estadoSistema = PIC_FINAL_ALCANZADA;
+      }
+      break;
 
+    case PIC_FINAL_ALCANZADA:
+      detenerMotor();
+      actualizarPIC();
+      mostrarPICMonitor();
+      transmitirDatos();
+      break;
 
-    controlarPresion();
-  }
+    case RETORNANDO_A_INICIO:
+      if (digitalRead(switchRight) == LOW) {
+        detenerMotor();
+        digitalWrite(relayPin, RELAY_OFF); // <-- AÑADIDO: Apaga el relé al finalizar el retorno
+        
+        Serial.println("\n================================");
+        Serial.println("FINAL DE CARRERA DETECTADO");
+        Serial.println("Motor DETENIDO | Rele APAGADO");
+        Serial.println("Retorno completado.");
+        Serial.println("================================");
 
+        // --- SE LIBERA LA BANDERA ---
+        listoParaNuevaSesion = true;
 
-  generarPasosMotor();
-
-
-  verificarFinalesDeCarrera();
-
-
-  transmitirDatosWS();
-
-
-  if (
-    millis() -
-    tiempoUltimaImpresion >=
-    intervaloImpresion_ms
-  ) {
-
-    tiempoUltimaImpresion =
-      millis();
-
-
-    mostrarDatos();
+        reiniciarEscenario();
+        break;
+      }
+      generarPasosMotor();
+      break;
   }
 }
